@@ -1,0 +1,4 @@
+# Blender auto-save backups
+*.blend1
+*.blend2
+*.blend@
