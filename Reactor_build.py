@@ -19,6 +19,8 @@ PALETTE = {
     "M_Metal_Panel":   (0.45, 0.47, 0.52, 0.45, 0.70),
     "M_Metal_Dark":    (0.17, 0.18, 0.21, 0.50, 0.80),
     "M_Steel":         (0.60, 0.62, 0.66, 0.50, 0.25),
+    "M_Mesh_Silver":   (0.72, 0.74, 0.78, 0.40, 0.55),
+    "M_Water":         (0.10, 0.34, 0.55, 0.06, 0.0),
     "M_Pipe":          (0.40, 0.42, 0.47, 0.40, 0.70),
     "M_Copper":        (0.55, 0.38, 0.22, 0.40, 0.80),
     "M_Rust":          (0.42, 0.27, 0.18, 0.85, 0.10),
@@ -40,7 +42,7 @@ FALLBACK_MAT = "M_Concrete"
 MAT_FX = {
     "M_Concrete": (0.13, 0.06), "M_Concrete_Dark": (0.11, 0.05),
     "M_Metal_Panel": (0.07, 0.0), "M_Metal_Dark": (0.06, 0.0),
-    "M_Steel": (0.06, 0.0), "M_Pipe": (0.06, 0.0), "M_Copper": (0.06, 0.0),
+    "M_Steel": (0.06, 0.0), "M_Mesh_Silver": (0.05, 0.0), "M_Pipe": (0.06, 0.0), "M_Copper": (0.06, 0.0),
     "M_Rust": (0.14, 0.05), "M_Hazard_Yellow": (0.04, 0.0), "M_Rubber": (0.05, 0.0),
 }
 # emissive: name -> (r,g,b, strength)
@@ -51,8 +53,9 @@ EMISSIVE = {
     "M_Emit_Warm": (1.00, 0.86, 0.62, 6.0),
     "M_Emit_Blue": (0.25, 0.50, 1.00, 6.0),
     "M_Screen": (0.30, 0.80, 0.92, 5.0),
+    "M_Water": (0.12, 0.45, 0.78, 0.4),
 }
-TRANSPARENT = {"M_Glass": 0.28}
+TRANSPARENT = {"M_Glass": 0.28, "M_Water": 0.2}
 
 def srgb_to_lin(c):
     return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
@@ -166,7 +169,7 @@ def build_part_bm(part):
     elif p == "cone":
         rad = part.get("rad", 0.5); h = part.get("h", 1.0); v = int(part.get("v", 16))
         r2 = part.get("rad2", 0.0)
-        bmesh.ops.create_cone(bm, cap_ends=True, cap_tris=False, segments=v,
+        bmesh.ops.create_cone(bm, cap_ends=part.get("cap", True), cap_tris=False, segments=v,
                               radius1=rad, radius2=r2, depth=h)
         mindim = min(2 * rad, h); do_bevel = False
     elif p == "sphere":
@@ -204,6 +207,8 @@ def build_part_bm(part):
         bmesh.ops.transform(bm, matrix=R, verts=bm.verts)
     bmesh.ops.translate(bm, vec=loc, verts=bm.verts)
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)  # isolated shell -> correct outward
+    if part.get("flip"):  # inward-facing (dome ceiling, pool walls seen from inside)
+        bmesh.ops.reverse_faces(bm, faces=bm.faces)
     return bm, mat
 
 def box_uv(me, scale=UV_SCALE):

@@ -84,6 +84,36 @@ def make_variant(src, name, val=1.0, sat=1.0, rough_min=None):
     m.diffuse_color = (c[0] * val, c[1] * val, c[2] * val, 1.0)
     return m
 
+def add_instance_jitter(m):
+    """Per-OBJECT random UV offset (Object Info.Random) so adjacent linked-duplicate
+    modules don't repeat the exact same texture pattern. Idempotent via node label."""
+    if m is None or not m.use_nodes:
+        return
+    nt = m.node_tree
+    if any(n.label == "PW_UVJitter" for n in nt.nodes):
+        return
+    texes = [n for n in nt.nodes if n.type == 'TEX_IMAGE']
+    if not texes:
+        return
+    obi = nt.nodes.new('ShaderNodeObjectInfo')
+    tc = nt.nodes.new('ShaderNodeTexCoord')
+    m1 = nt.nodes.new('ShaderNodeMath'); m1.operation = 'MULTIPLY'; m1.inputs[1].default_value = 13.0
+    m2 = nt.nodes.new('ShaderNodeMath'); m2.operation = 'MULTIPLY'; m2.inputs[1].default_value = 7.0
+    comb = nt.nodes.new('ShaderNodeCombineXYZ')
+    add = nt.nodes.new('ShaderNodeVectorMath'); add.operation = 'ADD'; add.label = "PW_UVJitter"
+    bx = min(n.location.x for n in texes) - 1000
+    for i, n in enumerate((obi, tc, m1, m2, comb, add)):
+        n.location = (bx + (i // 2) * 190, -80 - (i % 2) * 200)
+    nt.links.new(obi.outputs['Random'], m1.inputs[0])
+    nt.links.new(obi.outputs['Random'], m2.inputs[0])
+    nt.links.new(m1.outputs[0], comb.inputs['X'])
+    nt.links.new(m2.outputs[0], comb.inputs['Y'])
+    nt.links.new(tc.outputs['UV'], add.inputs[0])
+    nt.links.new(comb.outputs[0], add.inputs[1])
+    for t in texes:
+        if not t.inputs['Vector'].is_linked:
+            nt.links.new(add.outputs[0], t.inputs['Vector'])
+
 MAT_OVERRIDES = {}
 _conc = bpy.data.materials.get("PWK Stylized Concrete")
 _met = bpy.data.materials.get("PWK Stylized Metal")
@@ -93,6 +123,8 @@ if _conc:
 if _met:
     MAT_OVERRIDES["PW_MetalDark"] = make_variant(_met, "PWK Stylized Metal Matte", rough_min=0.45)
     MAT_OVERRIDES["PW_MetalDarker"] = make_variant(_met, "PWK Stylized Metal Matte Dark", val=0.50, rough_min=0.50)
+for _m in set(MAT_OVERRIDES.values()):
+    add_instance_jitter(_m)
 
 def mat(name, color, rough=0.8, metallic=0.0, emit=0.0):
     if name in MAT_OVERRIDES:
@@ -351,7 +383,7 @@ def build_panel(name, variant, origin):
         for _ in range(7):
             cx = rng.uniform(-1.7, 1.7)
             w = rng.uniform(0.35, 0.70)
-            b.box((w, 0.86, 0.09), (cx, 0.0, 4.03), VINE)
+            b.box((w, 0.40, 0.09), (cx, -0.16, 4.03), VINE)   # hug the outer cap edge
             for _ in range(rng.randint(3, 5)):
                 x = cx + rng.uniform(-w / 2, w / 2)
                 ln = rng.uniform(0.5, 1.7)
@@ -385,14 +417,23 @@ def build_pillar(name, plinth, shaft_b, shaft_t, shaft_h, origin, col=C_WALL, in
     return b.build(origin)
 
 # ---------------------------------------------------------------- toppers
-def build_top_railing(origin):
-    b = B("PW_TopRailing", C_TOP)
-    b.box((L, 0.50, 0.12), (0, 0, 0.06), MET_D)
-    for x in (-1.93, -0.965, 0.0, 0.965, 1.93):
+def build_top_railing(origin, name="PW_TopRailing", gap=0.0):
+    """4m wall-top railing. gap > 0 leaves a centered opening (e.g. tower/ladder access)."""
+    b = B(name, C_TOP)
+    if gap <= 0:
+        segs = ((0.0, L),)
+        posts = (-1.93, -0.965, 0.0, 0.965, 1.93)
+    else:
+        seg_len = (L - gap) / 2
+        segs = ((-(gap + seg_len) / 2, seg_len), ((gap + seg_len) / 2, seg_len))
+        posts = (-1.93, -0.965, -gap / 2, gap / 2, 0.965, 1.93)
+    for cx, ln in segs:
+        b.box((ln, 0.50, 0.12), (cx, 0, 0.06), MET_D)
+        b.box((ln, 0.07, 0.08), (cx, 0, 1.18), MET_D)
+        b.box((ln, 0.05, 0.05), (cx, 0, 0.72), MET_DD)
+        b.box((ln, 0.04, 0.16), (cx, 0, 0.22), MET_D)
+    for x in posts:
         b.box((0.07, 0.07, 1.02), (x, 0, 0.63), MET_DD)
-    b.box((L, 0.07, 0.08), (0, 0, 1.18), MET_D)
-    b.box((L, 0.05, 0.05), (0, 0, 0.72), MET_DD)
-    b.box((L, 0.04, 0.16), (0, 0, 0.22), MET_D)
     for x in (-1.93, 1.93):
         b.lamp((x, 0, 1.28))
     return b.build(origin)
@@ -585,6 +626,35 @@ def build_walkway_slab(origin):
     b.box((2.0, 1.50, 0.15), (0, 0, 0.075), MET_D)
     return b.build(origin)
 
+def build_tower_platform(origin):
+    """Bastion deck for the double-wall rampart: 8m (2 wall units) x 7.4m, deck top
+    +0.06 above the walkway plane, perimeter railings on the side bulges, open along
+    the walkway lane. Mount a TowerTop at its center — leaves a ~1.3m ring to walk
+    around the balcony."""
+    b = B("PW_TowerPlatform", C_WLK)
+    b.box((8.0, 7.4, 0.14), (0, 0, -0.01), MET_D)
+    STRUT = math.radians(35.2)
+    for bx in (-3.0, -1.0, 1.0, 3.0):
+        b.box((0.24, 7.0, 0.22), (bx, 0, -0.19), MET_DD)
+        b.box((0.18, 2.08, 0.14), (bx, -2.45, -0.75), MET_DD, rot=(-STRUT, 0, 0))
+        b.box((0.18, 2.08, 0.14), (bx, 2.45, -0.75), MET_DD, rot=(STRUT, 0, 0))
+    def prail(cx, cy, ln, along_x):
+        n = max(2, int(ln / 1.1) + 1)
+        for i in range(n):
+            t = -ln / 2 + i * (ln / (n - 1))
+            p = (cx + t, cy, 0.57) if along_x else (cx, cy + t, 0.57)
+            b.box((0.07, 0.07, 1.02), p, MET_DD)
+        sizes = ((ln, 0.07, 0.08), (ln, 0.05, 0.05), (ln, 0.04, 0.16)) if along_x else \
+                ((0.07, ln, 0.08), (0.05, ln, 0.05), (0.04, ln, 0.16))
+        for s, z in zip(sizes, (1.12, 0.66, 0.16)):
+            b.box(s, (cx, cy, z), MET_D if z == 1.12 else MET_DD)
+    for sy in (-3.57, 3.57):                     # long edges of the bulges
+        prail(0, sy, 7.74, True)
+    for sx in (-3.87, 3.87):                     # bulge ends (walkway lane stays open)
+        for sy in (-3.04, 3.04):
+            prail(sx, sy, 1.32, False)
+    return b.build(origin)
+
 def build_walkway_extension(origin):
     """Origin at deck underside — sits directly on a wall top (z=4)."""
     b = B("PW_WalkwayExtension", C_WLK)
@@ -657,6 +727,7 @@ panel_number = build_panel("PW_WallPanel_Number", 'number', (6,  Y1, 0))
 panel_hazard = build_panel("PW_WallPanel_Hazard", 'hazard', (12, Y1, 0))
 panel_vines  = build_panel("PW_WallPanel_Vines",  'vines',  (18, Y1, 0))
 railing      = build_top_railing((24, Y1, 0))
+railing_gate = build_top_railing((43.5, Y1, 0), name="PW_TopRailing_Gate", gap=1.1)
 toplight     = build_top_light((28.5, Y1, 0))
 topladder    = build_ladder("PW_TopLadder", 3.5, (32, Y1, 0))
 build_lower_grate((35.5, Y1, 0))
@@ -667,6 +738,7 @@ build_walkway_endcap((11, Y2, 0))
 build_walkway_extension((16, Y2, 0))
 build_top_roof((21, Y2, 0))
 build_walkway_slab((25, Y2, 0))
+platform = build_tower_platform((31, Y2, 1.35))   # struts reach the ground at 1.35
 
 build_barbed_wire((0, Y3, 0))
 build_small_light((3, Y3, 0))
@@ -731,18 +803,59 @@ def rdup(src, name, loc):
     return d
 
 RUN_N = 16
+RUN_GAP = 4.0         # wall centerlines 4m apart -> one thick walkable rampart
 RUN_SPECIAL = {4: 'hazard', 12: 'hazard', 6: 'vines', 13: 'vines', 9: 'number'}
+RUN_TOWER_BOUNDS = (2.0, 30.0, 58.0)   # tower platforms centered on these unit boundaries
+RUN_TOWER_UNITS = {0, 1, 7, 8, 14, 15}  # units under a platform: no walkway railing/light
 _variants = {'hazard': panel_hazard, 'vines': panel_vines, 'number': panel_number}
+
+# wall A (south, face details outward)
 for i in range(RUN_N):
     x = i * L
-    d = rdup(_variants.get(RUN_SPECIAL.get(i), panel_plain), "PW_RUN_Panel%02d" % i, (x, 0, 0))
-    if RUN_SPECIAL.get(i) == 'vines':
-        d.rotation_euler = (0, 0, math.pi)   # vines drape on the far side of the run
+    rdup(_variants.get(RUN_SPECIAL.get(i), panel_plain), "PW_RUN_Panel%02d" % i, (x, 0, 0))
     rdup(pillar, "PW_RUN_Pillar%02d" % i, (x - 2.0, 0, 0))
-    rdup(railing, "PW_RUN_Railing%02d" % i, (x, 0.10, H))
-    if i % 2 == 0:
-        rdup(toplight, "PW_RUN_Light%02d" % i, (x + 0.9, -0.14, H))
+    if i not in RUN_TOWER_UNITS:
+        rdup(railing, "PW_RUN_Railing%02d" % i, (x, -0.13, H))
+        if i % 2 == 0:
+            rdup(toplight, "PW_RUN_Light%02d" % i, (x + 0.9, 0.30, H))
 rdup(pillar, "PW_RUN_Pillar%02d" % RUN_N, (RUN_N * L - 2.0, 0, 0))   # cap the open end
+
+# wall B (north, rotated 180 so face details point outward)
+for i in range(RUN_N):
+    x = i * L
+    d = rdup(_variants.get(RUN_SPECIAL.get(i), panel_plain), "PW_RUN_B_Panel%02d" % i, (x, RUN_GAP, 0))
+    d.rotation_euler = (0, 0, math.pi)
+    rdup(pillar, "PW_RUN_B_Pillar%02d" % i, (x - 2.0, RUN_GAP, 0))
+    if i not in RUN_TOWER_UNITS:
+        rdup(railing, "PW_RUN_B_Railing%02d" % i, (x, RUN_GAP + 0.13, H))
+        if i % 2 == 0:
+            dl = rdup(toplight, "PW_RUN_B_Light%02d" % i, (x + 0.9, RUN_GAP - 0.30, H))
+            dl.rotation_euler = (0, 0, math.pi)
+rdup(pillar, "PW_RUN_B_Pillar%02d" % RUN_N, (RUN_N * L - 2.0, RUN_GAP, 0))
+
+# elevated walkway deck spanning between the two wall caps (top flush at z=4.0),
+# with cross beams below — cap strip + deck + cap strip = one ~4.8m walkable top
+_fb = B("PW_RUN_Deck", C_RUN)
+_fb.box((65.6, RUN_GAP - 0.76, 0.14), (0, 0, -0.07), MET_D)
+for i in range(RUN_N):
+    _fb.box((0.24, RUN_GAP - 0.60, 0.22), (i * L - 30.0, 0, -0.25), MET_DD)
+_deck = _fb.build((0, 0, 0))
+_deck.parent = run
+_deck.location = (30.0, RUN_GAP / 2, H)
+
+# three guard towers ON the walkway: bastion platform (deck top at H+0.06) with a
+# TowerTop at its center — a ~1.3m railed ring lets you walk all the way around the
+# balcony; steps rise to the balcony through its railing gap (facing -X, down the lane)
+for k, bx in enumerate(RUN_TOWER_BOUNDS):
+    rdup(platform, "PW_RUN_TowerPlatform%d" % k, (bx, RUN_GAP / 2, H))
+    rdup(tower_top, "PW_RUN_Tower%d" % k, (bx, RUN_GAP / 2, H + 0.06))
+    _sb = B("PW_RUN_TowerSteps%d" % k, C_RUN)
+    _sb.box((1.0, 0.30, 0.50), (0, 0.15, 0.25), MET_DD)
+    _sb.box((1.0, 0.30, 0.25), (0, 0.45, 0.125), MET_DD)
+    st = _sb.build((0, 0, 0))
+    st.parent = run
+    st.location = (bx - 2.25, RUN_GAP / 2, H + 0.06)
+    st.rotation_euler = (0, 0, D90)      # steps descend westward from the balcony gap
 
 # ---------------------------------------------------------------- labels
 def label(txt, x, y, size=0.5):
@@ -754,17 +867,17 @@ def label(txt, x, y, size=0.5):
     C_LBL.objects.link(ob)
 
 label("PERIMETER WALL — MODULAR KIT", 16, 5.5, 1.2)
-label("WALL RUN — 16 PANELS (64m)", 30, 6.9, 0.9)
+label("DOUBLE WALL RUN — 16 PANELS + 3 TOWERS", 30, 6.9, 0.9)
 for t, x in (("WATCHTOWER (ASSEMBLY)", 0), ("TOWER BASE", 8), ("TOWER TOP", 14),
              ("WALL STRAIGHT (ASSEMBLY)", 22), ("WALL STRAIGHT 1-PILLAR", 29),
              ("WALL PILLAR", 34), ("WALL END CAP", 38)):
     label(t, x, Y0 - 2.6)
 for t, x in (("PANEL PLAIN", 0), ("PANEL NUMBER", 6), ("PANEL HAZARD", 12), ("PANEL VINES", 18),
              ("TOP RAILING", 24), ("TOP LIGHT", 28.5), ("TOP LADDER", 32),
-             ("LOWER GRATE", 35.5), ("FENCE PANEL", 39.5)):
+             ("LOWER GRATE", 35.5), ("FENCE PANEL", 39.5), ("RAILING GATE", 43.5)):
     label(t, x, Y1 - 2.4)
 for t, x in (("WALKWAY MODULE", 2), ("WALKWAY END CAP", 11), ("WALKWAY EXTENSION", 16), ("TOP ROOF", 21),
-             ("WALKWAY SLAB", 25)):
+             ("WALKWAY SLAB", 25), ("TOWER PLATFORM", 31)):
     label(t, x, Y2 - 2.4)
 for t, x in (("BARBED WIRE", 0), ("SMALL LIGHT", 3), ("BOLT PLATE", 6), ("DRAIN SPOUT", 9), ("HOOK / TIE", 12)):
     label(t, x, Y3 - 1.6, 0.35)
