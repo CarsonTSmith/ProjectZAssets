@@ -1256,9 +1256,10 @@ def stair_steps(mb, x0, x1, y0, z0, n, sgn=1.0, carpet=True):
         sl(mb, x0, x1, r0, r1, zb, zt - STAIR_TREAD, wd)          # riser board
         sl(mb, x0, x1, t0, t1, zt - STAIR_TREAD, zt, wd)          # tread
         if carpet:
-            sl(mb, x0 + cw, x1 - cw, t0, t1, zt, zt + 0.016, ct)
-            c0, c1 = sorted((yf, yf - sgn * 0.016))
-            sl(mb, x0 + cw, x1 - cw, c0, c1, zb, zt - STAIR_TREAD, ct)
+            # a patch sitting ON the tread, clear of the nosing at the front and
+            # short of the riser behind -- not a runner wrapping over the edge
+            k0, k1 = sorted((yf + sgn * 0.09, yb - sgn * 0.05))
+            sl(mb, x0 + cw, x1 - cw, k0, k1, zt, zt + 0.016, ct)
     return y0 + sgn * n * STAIR_GOING, z0 + n * STAIR_RISE
 
 
@@ -1291,6 +1292,52 @@ def landing_slab(mb, x0, x1, y0, y1, z, carpet=True):
     sl(mb, x0, x1, y0, y1, z - 0.30, z, M(WOOD), {"-z": M(CEIL), "+z": M(WOOD)})
     if carpet:
         sl(mb, x0 + 0.34, x1 - 0.34, y0 + 0.20, y1 - 0.34, z, z + 0.016, M(CARPET))
+
+
+def curved_flight(mb, cx, cy, ri, ro, a0, a1, z0, n, carpet=True,
+                  rails=(True, True)):
+    """n winders sweeping a0 -> a1 about (cx, cy), each rising STAIR_RISE.
+
+    Off-axis by definition, so this leans on fix_tilted_uvs() to keep the tread
+    and carpet texel density from foreshortening. Returns the top z."""
+    wd, ct, br = M(WOOD), M(CARPET), M(BRASS)
+    da = (a1 - a0) / float(n)
+
+    def at(r, a, z):
+        return (cx + r * math.cos(a), cy + r * math.sin(a), z)
+
+    def arc(r, z, aa, bb):
+        return [at(r, aa, z), at(r, bb, z)]
+
+    lines = ([], [])
+    for i in range(n):
+        b0, b1 = a0 + i * da, a0 + (i + 1) * da
+        zb = z0 + i * STAIR_RISE
+        zt = zb + STAIR_RISE
+        mb.extrude_poly(arc(ri, zt, b0, b1) + arc(ro, zt, b1, b0),
+                        (0, 0, -STAIR_TREAD), wd)                     # tread
+        tang = (-math.sin(b0) * 0.06, math.cos(b0) * 0.06, 0.0)
+        if da < 0:
+            tang = (-tang[0], -tang[1], 0.0)
+        mb.extrude_poly([at(ri, b0, zb), at(ro, b0, zb),
+                         at(ro, b0, zt - STAIR_TREAD),
+                         at(ri, b0, zt - STAIR_TREAD)], tang, wd)     # riser
+        if carpet:
+            g = abs(da) * 0.20
+            mb.extrude_poly(arc(ri + 0.34, zt + 0.016, b0 + g, b1 - g) +
+                            arc(ro - 0.34, zt + 0.016, b1 - g, b0 + g),
+                            (0, 0, -0.016), ct)
+        for k, (want, r) in enumerate(zip(rails, (ri + 0.13, ro - 0.13))):
+            if not want:
+                continue
+            bx, by, _ = at(r, b1, 0.0)
+            sl(mb, bx - 0.035, bx + 0.035, by - 0.035, by + 0.035,
+               zt, zt + RAIL_H, br)
+            lines[k].append((bx, by, zt + RAIL_H))
+    for pts in lines:
+        for q0, q1 in zip(pts[:-1], pts[1:]):
+            mb.beam(q0, q1, 0.11, 0.10, wd)
+    return z0 + n * STAIR_RISE
 
 
 def t_straight_half(mb):
@@ -1328,28 +1375,9 @@ def t_half_turn(mb):
 
 def t_spiral(mb):
     """4 x 4 m footprint, rises a full storey on 32 winders about a newel."""
-    n, ri, ro = STAIR_N, 0.24, 1.88
-    sweep = RAD(540.0)                          # one and a half turns
-    da = sweep / n
-    wd, ct, br = M(WOOD), M(CARPET), M(BRASS)
-    mb.cyl((0.0, 0.0, H / 2.0), ri, H, wd, segments=20)
-    rail = []
-    for i in range(n):
-        b0, b1 = i * da, (i + 1) * da
-        zt = (i + 1) * STAIR_RISE
-        def arc(r, z, aa, bb):
-            return [(r * math.cos(aa), r * math.sin(aa), z),
-                    (r * math.cos(bb), r * math.sin(bb), z)]
-        pts = arc(ri, zt, b0, b1) + arc(ro, zt, b1, b0)
-        mb.extrude_poly(pts, (0, 0, -STAIR_TREAD), wd)
-        cp = arc(ri + 0.26, zt + 0.016, b0 + da * 0.05, b1 - da * 0.05) + \
-             arc(ro - 0.26, zt + 0.016, b1 - da * 0.05, b0 + da * 0.05)
-        mb.extrude_poly(cp, (0, 0, -0.016), ct)
-        bx, by = (ro - 0.13) * math.cos(b1), (ro - 0.13) * math.sin(b1)
-        sl(mb, bx - 0.035, bx + 0.035, by - 0.035, by + 0.035, zt, zt + RAIL_H, br)
-        rail.append((bx, by, zt + RAIL_H))
-    for p, q in zip(rail[:-1], rail[1:]):
-        mb.beam(p, q, 0.11, 0.10, wd)
+    mb.cyl((0.0, 0.0, H / 2.0), 0.24, H, M(WOOD), segments=20)
+    curved_flight(mb, 0.0, 0.0, 0.24, 1.88, 0.0, RAD(540.0), 0.0, STAIR_N,
+                  rails=(False, True))
 
 
 def t_landing(mb):
@@ -1358,10 +1386,38 @@ def t_landing(mb):
     landing_slab(mb, -HW, HW, -HW, HW, 0.0)
 
 
+def t_grand_double(mb):
+    """Gatsby double stair: a mirrored pair of curved flights sweeping up and
+    inward to a shared gallery landing. 12 x 8 m footprint (3 x 2 modules),
+    rises a full storey. Each flight sweeps 180 degrees -- it starts facing you
+    at the front, bulges out to the side, and arrives at the back."""
+    ri, ro, cy = 2.00, 3.80, 4.00
+    for sgn in (-1.0, 1.0):
+        cx = sgn * 2.20
+        # both start at the front (-Y) and turn away from centre as they climb
+        a0 = RAD(-90.0)
+        a1 = RAD(-270.0) if sgn < 0 else RAD(90.0)
+        curved_flight(mb, cx, cy, ri, ro, a0, a1, 0.0, STAIR_N)
+        # newel at the foot of each flight
+        nx, ny = cx + (ro - 0.13) * math.cos(a0), cy + (ro - 0.13) * math.sin(a0)
+        sl(mb, nx - 0.11, nx + 0.11, ny - 0.11, ny + 0.11, 0.0,
+           RAIL_H + 0.34, M(WOOD))
+    # gallery landing bridging the two tops
+    landing_slab(mb, -4.20, 4.20, 5.80, 8.00, H)
+    for x in (-4.20, 4.20):
+        sl(mb, x - 0.11, x + 0.11, 5.80, 6.02, H, H + RAIL_H + 0.20, M(WOOD))
+    mb.beam((-4.20, 5.91, H + RAIL_H), (4.20, 5.91, H + RAIL_H),
+            0.11, 0.10, M(WOOD))
+    for k in range(1, 21):
+        bx = -4.20 + 8.40 * k / 21.0
+        sl(mb, bx - 0.035, bx + 0.035, 5.87, 5.95, H, H + RAIL_H, M(BRASS))
+
+
 STAIRS = [
     ("Stair_Straight_Half", t_straight_half),
     ("Stair_HalfTurn",      t_half_turn),
     ("Stair_Spiral",        t_spiral),
+    ("Stair_Grand_Double",  t_grand_double),
     ("Stair_Landing_4x4",   t_landing),
 ]
 
