@@ -103,7 +103,7 @@ OVL = 0.03                   # trim lap -- see casing()
 
 WIN_W, WIN_H, WIN_S = 1.40, 4.00, 1.50         # head 5.50
 WIDE_W = 2.60
-FRENCH_S = 1.00
+FRENCH_S = WIN_S              # every window sill lines up
 SHOP_W, SHOP_S = 2.80, 0.55
 SHUT_W, SHUT_T = 0.52, 0.12  # open shutter leaf: width, thickness
 HEAD_Z = WIN_S + WIN_H                         # 5.50 -- everything lines up
@@ -131,9 +131,9 @@ DG_LEAF_W = DG_HINGE - 0.03                         # 1.57
 # The openable window is the WIDE one -- a pair of casements big enough to read
 # as french doors when they part in the middle. No shutters on this piece:
 # 2.80 + two 0.34 architraves already leaves only 0.26 m of wall each side.
-# Sill is set so the exterior sill shelf clears the plinth cap (0.80): any
-# lower and the shelf grows down into the plinth.
-OPEN_W, OPEN_SILL, OPEN_H = 2.80, 1.40, 4.10        # head 5.50, as everything
+# Sill matches every other window so the whole facade reads on one line; at
+# 1.50 the exterior sill shelf also clears the plinth cap (0.80).
+OPEN_W, OPEN_SILL, OPEN_H = 2.80, WIN_S, 4.00       # sill AND head line up
 SASH_HINGE = OPEN_W / 2 - LINER                     # 1.24
 SASH_W = SASH_HINGE - 0.01                          # 1.23
 SASH_Z0, SASH_Z1 = OPEN_SILL + LINER, OPEN_SILL + OPEN_H - LINER
@@ -634,7 +634,7 @@ def w_solid_c(mb):
     sl(mb, -HW + 0.02, -HW + 0.86, -HT - 0.25, -HT + 0.001, CORN_B - 0.34,
        CORN_B, M(WHITE))
     sl(mb, -0.20, 1.75, -HT - 0.13, -HT + 0.001, 3.00, 5.00, M(WHITE))
-    sl(mb, -0.02, 1.57, -HT - 0.18, -HT + 0.001, 3.18, 4.82, M(ACCENT))
+    sl(mb, -0.02, 1.57, -HT - 0.18, -HT + 0.001, 3.18, 4.82, M(BODY))
     for k in range(3):
         z = 3.50 + k * 0.60
         sl(mb, 0.14, 1.41, -HT - 0.23, -HT + 0.001, z, z + 0.22, M(WHITE))
@@ -672,8 +672,6 @@ def w_win_c(mb):
     shutters_open(mb, op)
     shell(mb, HW, [op])
     bands(mb, HW, [op])
-    sl(mb, op[0] - 0.14, op[1] + 0.14, -HT - 0.32, -HT + 0.001,
-       FRENCH_S - 0.20, FRENCH_S, M(STONE))
 
 
 def w_win_twin(mb):
@@ -690,7 +688,7 @@ def w_shopfront(mb):
     shell(mb, HW, [op])
     bands(mb, HW, [op])
     sl(mb, op[0] - CASE, op[1] + CASE, -HT - CASE_P - 0.02, -HT + 0.001,
-       0.0, SHOP_S, M(ACCENT))
+       0.0, SHOP_S, M(BODY))
     sl(mb, max(op[0] - CASE - 0.08, -HW), min(op[1] + CASE + 0.08, HW),
        -HT - CASE_P - 0.14, -HT + 0.001, SHOP_S - 0.18, SHOP_S, M(WHITE))
 
@@ -709,7 +707,7 @@ def door_bay(mb, hw, ow, oh, leaf_top, case, liner, case_p, pilaster=0.0):
     casing(mb, op, sill=False, entab=entab, case=case, case_p=case_p, hw=hw)
     shell(mb, hw, [op])
     bands(mb, hw, [op])
-    w, d, a, br, st = M(WHITE), M(DOORM), M(ACCENT), M(BRASS), M(STONE)
+    w, d, br, st = M(WHITE), M(DOORM), M(BRASS), M(STONE)
 
     for cx in (op[0] - case / 2, op[1] + case / 2):     # architrave plinth blocks
         sl(mb, max(cx - case / 2 - 0.07, -hw), min(cx + case / 2 + 0.07, hw),
@@ -726,7 +724,7 @@ def door_bay(mb, hw, ow, oh, leaf_top, case, liner, case_p, pilaster=0.0):
             for k in range(3):                          # fluting
                 fx = cx - 0.20 + k * 0.20
                 sl(mb, fx - 0.04, fx + 0.04, -HT - 0.29, -HT - 0.21,
-                   PLINTH_T + 0.34, oh + case - 0.54, a)
+                   PLINTH_T + 0.34, oh + case - 0.54, w)
 
     # name panel let into the frieze: the whole bay is white plaster edge to
     # edge, and this is the one place a colour accent can go without weakening
@@ -735,7 +733,7 @@ def door_bay(mb, hw, ow, oh, leaf_top, case, liner, case_p, pilaster=0.0):
     sl(mb, op[0] - case * 0.4, op[1] + case * 0.4, -HT - case_p - 0.12,
        -HT + 0.001, zf + entab * 0.10, zf + entab * 0.44, w)
     sl(mb, op[0] - case * 0.1, op[1] + case * 0.1, -HT - case_p - 0.17,
-       -HT + 0.001, zf + entab * 0.16, zf + entab * 0.38, a)
+       -HT + 0.001, zf + entab * 0.16, zf + entab * 0.38, M(BODY))
 
     x0, x1 = op[0] + liner, op[1] - liner
     sl(mb, x0 - 0.07, x1 + 0.07, -HT - 0.22, HT + 0.04,
@@ -757,7 +755,7 @@ def door_leaf(mb, width, leaf_top, side):
     about local Z in Blender / Y in Unity and it swings correctly."""
     lx0, lx1 = (0.0, width) if side < 0 else (-width, 0.0)
     free = lx1 if side < 0 else lx0          # the edge away from the hinge
-    d, a, br, w = M(DOORM), M(DPANEL), M(BRASS), M(WHITE)
+    d, a, br = M(DOORM), M(DPANEL), M(BRASS)
     LT, SW, RL = leaf_top, 0.30, 0.30
     rails = [(0.08, 0.08 + RL * 1.8), (1.15, 1.15 + RL * 1.2),
              (LT * 0.60, LT * 0.60 + RL * 1.15), (LT - RL * 1.3, LT)]
@@ -782,7 +780,7 @@ def door_leaf(mb, width, leaf_top, side):
             sl(mb, hx - 0.04, hx + 0.04, sy0, sy1, hz - 0.04, hz + 0.04, br)
     sl(mb, lx0 + 0.34, lx1 - 0.34, -0.165, -0.145, 0.16, 0.36, br)  # kick strip
     if side < 0:        # meeting bead, on the left leaf, covers the joint
-        sl(mb, free - 0.02, free + 0.06, -0.18, 0.16, 0.08, LT, w)
+        sl(mb, free - 0.02, free + 0.06, -0.18, 0.16, 0.08, LT, a)
 
 
 def win_sash(mb, width, z0, z1, side, nv=2, nh=4):
