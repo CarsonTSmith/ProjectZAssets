@@ -167,6 +167,9 @@ SRC_WOOD = "Stylized Wooden Planks"
 SRC_DOOR_FRAME = "Stylized Vertical Wood"     # stiles, rails, raised fields
 SRC_DOOR_PANEL = "Wood.002"                   # recessed panel ground
 SRC_BRASS = "Brushed Brass"                   # pull bars, kick strip, handles
+SRC_MARBLE = "Marble Tiles"                   # staged on the MarbleFloor swatch
+SRC_PARQUET = "Wood Parquete"                 # staged on the WoodFloor swatch
+SRC_CARPET = "Fleur de lis carpet"            # staged on the Carpet swatch
 
 WHITE = PFX + "Trim"
 STONE = PFX + "Stone"
@@ -182,6 +185,9 @@ BRASS = PFX + "Brass"
 GLASS = PFX + "Glass"
 DOORM = PFX + "DoorLeaf"
 DPANEL = PFX + "DoorPanel"
+CARPET = PFX + "Carpet"
+FLOOR_MARBLE = PFX + "Floor_Marble"           # drop-in swaps for the BK_Floor
+FLOOR_WOOD = PFX + "Floor_Wood"               # slot -- no new geometry needed
 DECK = PFX + "RoofDeck"
 PAVE = PFX + "Paving"
 LEAF = PFX + "Foliage"
@@ -218,6 +224,7 @@ INNERMATS = []
 UVS = {
     WHITE: 0.5, BODY: 0.5, INNER: 0.5, CEIL: 0.5, ACCENT: 0.5, SHUTM: 0.5,
     BRASS: 0.5, GLASS: 0.5, DOORM: 1.0, DPANEL: 0.5, DECK: 0.5, LEAF: 0.5,
+    CARPET: 1.0, FLOOR_MARBLE: 0.25, FLOOR_WOOD: 0.25,
     STONE: 0.5, TILE: 0.25, WOOD: 1.0, PAVE: 0.25, STAGE: 0.25,
 }
 
@@ -229,7 +236,7 @@ UVS = {
 # Unity prefab variant, or a script walking Renderer.sharedMaterials, can
 # recolour any piece in the kit without looking up names.
 CANON_MATS = [BODY, INNER, WHITE, ACCENT, GLASS, STONE, TILE, DOORM, DPANEL,
-              SHUTM, BRASS, DECK, CEIL, LEAF, WOOD, PAVE, STAGE]
+              SHUTM, BRASS, DECK, CEIL, LEAF, WOOD, CARPET, PAVE, STAGE]
 
 
 def M(n):
@@ -1222,6 +1229,143 @@ DETAILS = [
 ]
 
 
+# --------------------------------------------------------------- stairs ---
+# A storey is H = 8 m, so a flight must rise exactly that to land on the next
+# floor. 0.25 m risers give 32 to a storey; 0.40 m goings put the pitch at 32
+# degrees -- comfortable to climb, and the 0.25 m riser sits under Unity's
+# default CharacterController.stepOffset of 0.3, so a character walks these
+# without needing a ramp collider hidden inside them.
+STAIR_RISE, STAIR_GOING = 0.25, 0.40
+STAIR_N = int(round(H / STAIR_RISE))            # 32 risers per storey
+STAIR_TREAD, STAIR_NOSE = 0.08, 0.04
+RAIL_H = 1.00
+
+
+def stair_steps(mb, x0, x1, y0, z0, n, sgn=1.0, carpet=True):
+    """n treads climbing from (y0, z0), travelling +Y for sgn=1 and -Y for -1.
+    Returns the top (y, z)."""
+    wd, ct = M(WOOD), M(CARPET)
+    cw = (x1 - x0) * 0.17                       # runner inset from each string
+    for i in range(n):
+        yf = y0 + sgn * i * STAIR_GOING         # leading edge of this step
+        yb = yf + sgn * STAIR_GOING
+        zb = z0 + i * STAIR_RISE
+        zt = zb + STAIR_RISE
+        r0, r1 = sorted((yf, yf + sgn * 0.06))
+        t0, t1 = sorted((yf - sgn * STAIR_NOSE, yb))
+        sl(mb, x0, x1, r0, r1, zb, zt - STAIR_TREAD, wd)          # riser board
+        sl(mb, x0, x1, t0, t1, zt - STAIR_TREAD, zt, wd)          # tread
+        if carpet:
+            sl(mb, x0 + cw, x1 - cw, t0, t1, zt, zt + 0.016, ct)
+            c0, c1 = sorted((yf, yf - sgn * 0.016))
+            sl(mb, x0 + cw, x1 - cw, c0, c1, zb, zt - STAIR_TREAD, ct)
+    return y0 + sgn * n * STAIR_GOING, z0 + n * STAIR_RISE
+
+
+def stair_string(mb, x0, x1, y0, z0, n, sgn=1.0, depth=0.44):
+    """Raking side board under the treads. Its faces are off-axis, which is
+    exactly what fix_tilted_uvs() is there to keep from stretching."""
+    y1 = y0 + sgn * n * STAIR_GOING
+    z1 = z0 + n * STAIR_RISE
+    mb.extrude_poly([(x0, y0, z0 + STAIR_RISE), (x0, y1, z1),
+                     (x0, y1, z1 - depth), (x0, y0, z0 + STAIR_RISE - depth)],
+                    (x1 - x0, 0, 0), M(WOOD))
+
+
+def stair_rail(mb, x, y0, z0, y1, z1):
+    """Newel at each end, a raked handrail and brass balusters between."""
+    wd, br = M(WOOD), M(BRASS)
+    for yy, zz in ((y0, z0), (y1, z1)):
+        sl(mb, x - 0.09, x + 0.09, yy - 0.09, yy + 0.09, zz - 0.30,
+           zz + RAIL_H + 0.18, wd)
+    mb.beam((x, y0, z0 + RAIL_H), (x, y1, z1 + RAIL_H), 0.11, 0.10, wd)
+    span = math.hypot(y1 - y0, z1 - z0)
+    n = max(1, int(span / 0.42))
+    for k in range(1, n):
+        t = k / float(n)
+        yy, zz = y0 + (y1 - y0) * t, z0 + (z1 - z0) * t
+        sl(mb, x - 0.035, x + 0.035, yy - 0.035, yy + 0.035, zz, zz + RAIL_H, br)
+
+
+def landing_slab(mb, x0, x1, y0, y1, z, carpet=True):
+    sl(mb, x0, x1, y0, y1, z - 0.30, z, M(WOOD), {"-z": M(CEIL), "+z": M(WOOD)})
+    if carpet:
+        sl(mb, x0 + 0.34, x1 - 0.34, y0 + 0.20, y1 - 0.34, z, z + 0.016, M(CARPET))
+
+
+def t_straight_half(mb):
+    """4 x 8 m footprint, rises HALF a storey (4.0 m) and finishes on a landing.
+    Two of these -- the second turned 180 and lifted 4 m -- make a full storey
+    in the same footprint, which is what Stair_HalfTurn bakes in."""
+    n = STAIR_N // 2
+    x0, x1 = -1.34, 1.34
+    yt, zt = stair_steps(mb, x0, x1, 0.0, 0.0, n)
+    stair_string(mb, x0 - 0.15, x0, 0.0, 0.0, n)
+    stair_string(mb, x1, x1 + 0.15, 0.0, 0.0, n)
+    landing_slab(mb, -HW, HW, yt, 8.0, zt)          # out to the 8 m footprint
+    stair_rail(mb, x0 - 0.075, 0.0, 0.0, yt, zt)
+    stair_rail(mb, x1 + 0.075, 0.0, 0.0, yt, zt)
+
+
+def t_half_turn(mb):
+    """4 x 8 m footprint, rises a FULL storey (8.0 m): a flight up the left
+    half, a half-landing across the far end, a flight back down the right."""
+    n = STAIR_N // 2
+    run = n * STAIR_GOING                       # 6.4 m
+    a0, a1 = -1.86, -0.10                       # up-flight
+    b0, b1 = 0.10, 1.86                         # down-flight
+    stair_steps(mb, a0, a1, 0.0, 0.0, n)
+    stair_string(mb, a0 - 0.14, a0, 0.0, 0.0, n)
+    landing_slab(mb, -HW, HW, run, run + 1.60, H / 2)
+    stair_steps(mb, b0, b1, run, H / 2, n, sgn=-1.0)
+    stair_string(mb, b1, b1 + 0.14, run, H / 2, n, sgn=-1.0)
+    stair_rail(mb, a1 + 0.08, 0.0, 0.0, run, H / 2)          # inner, up
+    stair_rail(mb, b0 - 0.08, run, H / 2, 0.0, H)            # inner, down
+    # newel and rail across the open end of the half-landing
+    mb.beam((a1 + 0.08, run, H / 2 + RAIL_H), (b0 - 0.08, run, H / 2 + RAIL_H),
+            0.11, 0.10, M(WOOD))
+
+
+def t_spiral(mb):
+    """4 x 4 m footprint, rises a full storey on 32 winders about a newel."""
+    n, ri, ro = STAIR_N, 0.24, 1.88
+    sweep = RAD(540.0)                          # one and a half turns
+    da = sweep / n
+    wd, ct, br = M(WOOD), M(CARPET), M(BRASS)
+    mb.cyl((0.0, 0.0, H / 2.0), ri, H, wd, segments=20)
+    rail = []
+    for i in range(n):
+        b0, b1 = i * da, (i + 1) * da
+        zt = (i + 1) * STAIR_RISE
+        def arc(r, z, aa, bb):
+            return [(r * math.cos(aa), r * math.sin(aa), z),
+                    (r * math.cos(bb), r * math.sin(bb), z)]
+        pts = arc(ri, zt, b0, b1) + arc(ro, zt, b1, b0)
+        mb.extrude_poly(pts, (0, 0, -STAIR_TREAD), wd)
+        cp = arc(ri + 0.26, zt + 0.016, b0 + da * 0.05, b1 - da * 0.05) + \
+             arc(ro - 0.26, zt + 0.016, b1 - da * 0.05, b0 + da * 0.05)
+        mb.extrude_poly(cp, (0, 0, -0.016), ct)
+        bx, by = (ro - 0.13) * math.cos(b1), (ro - 0.13) * math.sin(b1)
+        sl(mb, bx - 0.035, bx + 0.035, by - 0.035, by + 0.035, zt, zt + RAIL_H, br)
+        rail.append((bx, by, zt + RAIL_H))
+    for p, q in zip(rail[:-1], rail[1:]):
+        mb.beam(p, q, 0.11, 0.10, wd)
+
+
+def t_landing(mb):
+    """Flat 4 x 4 landing with the same top datum as a floor slab, for joining
+    flights at a half-storey."""
+    landing_slab(mb, -HW, HW, -HW, HW, 0.0)
+
+
+STAIRS = [
+    ("Stair_Straight_Half", t_straight_half),
+    ("Stair_HalfTurn",      t_half_turn),
+    ("Stair_Spiral",        t_spiral),
+    ("Stair_Landing_4x4",   t_landing),
+]
+
+
 # ------------------------------------------------------------- materials ---
 def alias(src, name):
     """Namespaced copy of a library material. tint() would work too but it
@@ -1268,6 +1412,9 @@ def materials():
     BK.tint(TILE, STAGE, srgb(0x6E7C86), roughness=0.80)
     alias(SRC_DOOR_FRAME, DOORM)
     alias(SRC_DOOR_PANEL, DPANEL)
+    alias(SRC_CARPET, CARPET)
+    alias(SRC_MARBLE, FLOOR_MARBLE)
+    alias(SRC_PARQUET, FLOOR_WOOD)
     BK.flat(GLASS, srgb(0xB6DBE9), roughness=0.09)
     BK.flat(LABEL, srgb(0x2A2A2E), roughness=0.60)
 
@@ -1490,7 +1637,7 @@ def seam_for(name):
 
 
 ROW_Y = {"Walls": 0.0, "Roof": 14.0, "Ground": 26.0, "Details": 38.0,
-         "Palette": 50.0, "Openable": 62.0}
+         "Palette": 50.0, "Openable": 62.0, "Stairs": 76.0}
 STEP = 6.0
 DEMO_Y = -90.0
 RUN_Y = DEMO_Y - 46.0
@@ -1519,6 +1666,7 @@ def build():
     c_d = BK.ensure_coll(PFX + "Details", root)
     c_p = BK.ensure_coll(PFX + "Palette", root)
     c_o = BK.ensure_coll(PFX + "Openable", root)
+    c_t = BK.ensure_coll(PFX + "Stairs", root)
     c_x = BK.ensure_coll(PFX + "Demo", root)
     c_l = BK.ensure_coll(PFX + "Preview", root)
     c_lgt = BK.ensure_coll(PFX + "Lighting", root)
@@ -1528,13 +1676,14 @@ def build():
     # row gets a sunken bay -- paving, kerbs and the podium are authored BELOW
     # the finished-floor datum, so on a stage at z=0 they are buried in it.
     ground_plane(c_l, "Stage_Front", 36.0, -7.0, 112.0, 58.0, top=0.0, mat=STAGE)
-    ground_plane(c_l, "Stage_Back", 36.0, 50.0, 112.0, 44.0, top=0.0, mat=STAGE)
+    ground_plane(c_l, "Stage_Back", 36.0, 58.0, 112.0, 60.0, top=0.0, mat=STAGE)
     ground_plane(c_l, "Stage_Sunken", 36.0, 26.0, 112.0, 12.0, top=-0.78,
                  mat=STAGE)
 
     for coll, items, row in ((c_w, WALLS, "Walls"), (c_r, ROOFS, "Roof"),
                              (c_g, GROUNDS, "Ground"), (c_d, DETAILS, "Details"),
-                             (c_o, OPENABLE, "Openable")):
+                             (c_o, OPENABLE, "Openable"),
+                             (c_t, STAIRS, "Stairs")):
         y = ROW_Y[row]
         xcur = 0.0
         for name, fn in items:
@@ -1566,6 +1715,17 @@ def build():
                  bevel=0.0)
         label(c_l, "%s  clear %.2f m" % (pname, clear),
               (ob.location.x, ROW_Y["Walls"] - 2.2, -0.75))
+
+    # floor finishes: one mesh, one swappable slot -- these are the same
+    # BK_Floor slot shown with each of its material variants
+    for i, fm in enumerate((TILE, FLOOR_MARBLE, FLOOR_WOOD, CARPET)):
+        mb = MB("FloorSample_%d" % i, PFX)
+        sl(mb, -1.4, 1.4, -1.4, 1.4, -0.2, 0.0, M(TILE))
+        ob = out(mb, c_l, (i * 4.4 + 2.0, ROW_Y["Ground"] - 4.6, 0.0), bevel=0.0)
+        ob.material_slots[0].link = "OBJECT"
+        ob.material_slots[0].material = M(fm)
+        label(c_l, fm.replace(PFX, ""),
+              (i * 4.4 + 2.0, ROW_Y["Ground"] - 6.4, -0.4))
 
     for i, m in enumerate(BODYMATS):
         # two chips on one board: facade colour left, room colour right, so the
@@ -1691,6 +1851,8 @@ SHOTS = {
     "row_roof":    ((18.0, -5.0, 16.0), (18.0, 14.0, 1.0), 24),
     "row_ground":  ((18.0, 9.0, 10.0), (18.0, 26.0, -0.4), 24),
     "row_detail":  ((15.0, 21.0, 11.0), (15.0, 38.0, 2.6), 24),
+    "row_stairs":  ((14.0, 52.0, 9.0), (14.0, 76.0, 3.0), 30),
+    "floors":      ((10.0, 17.0, 6.0), (10.0, 23.0, 0.0), 34),
     "row_palette_a": ((9.0, 34.0, 10.0), (9.0, 50.0, 1.8), 24),
     "row_palette_b": ((33.0, 34.0, 10.0), (33.0, 50.0, 1.8), 24),
     # catalogue close-ups: WALLS index i sits at x = i*STEP
@@ -1722,7 +1884,7 @@ def export_fbx(out_dir):
     view = scene.view_layers[0]
     written = []
     for cn in (PFX + "Walls", PFX + "Roof", PFX + "Ground", PFX + "Details",
-               PFX + "Openable"):
+               PFX + "Openable", PFX + "Stairs"):
         for ob in list(bpy.data.collections[cn].objects):
             if ob.type != "MESH":
                 continue
