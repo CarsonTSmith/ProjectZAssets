@@ -82,7 +82,6 @@ PL_B, PLINTH_T = 0.62, 0.80  # plinth: base band then a projecting cap
 PL_P1, PL_P2 = 0.14, 0.24
 CORN_B, CORN_M1, CORN_M2 = 6.95, 7.32, 7.66    # three-step cornice
 CO_P1, CO_P2, CO_P3 = 0.18, 0.32, 0.48
-STR_B, STR_T, STR_P = 5.95, 6.30, 0.14         # optional string course
 
 # Interior: skirting, panelled wainscot, dado rail, then the colour field.
 SKIRT_T = 0.45
@@ -452,13 +451,6 @@ def bands(mb, hw, opens):
                 sl(mb, q0, q1, HT + 0.049, HT + 0.11, r0, r1, w)
 
 
-def string_course(mb, hw, opens):
-    w = M(WHITE)
-    for a, b in spans(hw, opens, STR_B, STR_T):
-        sl(mb, a, b, -HT - STR_P, -HT + 0.001, STR_B, STR_T, w)
-        sl(mb, a, b, -HT - STR_P - 0.07, -HT + 0.001, STR_T - 0.11, STR_T, w)
-
-
 def reveal(mb, op, sill=True, liner=LINER):
     """White plaster lining the full depth of an opening, so the hole reads as
     trimmed from inside as well as out."""
@@ -523,14 +515,17 @@ def casing(mb, op, sill=True, entab=0.0, case=None, case_p=None, hw=HW):
            zf + entab * 0.78, zf + entab, w)                         # corona
         # No console brackets in the frieze: the vertical stubs read as braces
         # propping the cornice up rather than as ornament.
+    # Room side: the architrave legs stand ON the sill board. Running them past
+    # it left two stubs poking out under the sill instead of a squared surround.
     iy0, iy1 = HT - 0.001, HT + ICASE_P
-    zi = z0 - (ICASE if sill else 0.0)
+    zi = (z0 + 0.02) if sill else z0
     sl(mb, x0 - ICASE, x0 + OVL, iy0, iy1, zi, z1 + ICASE, w)
     sl(mb, x1 - OVL, x1 + ICASE, iy0, iy1, zi, z1 + ICASE, w)
     sl(mb, x0, x1, iy0, iy1, z1 - OVL, z1 + ICASE, w)
     if sill:
+        # stool spans the full surround width and bottoms out on the dado line
         sl(mb, x0 - ICASE, x1 + ICASE, HT - 0.001, HT + 0.26,
-           z0 - 0.12, z0 + 0.02, w)
+           z0 - ICASE, z0 + 0.02, w)
 
 
 def glazing(mb, x0, x1, z0, z1, nv, nh, inset=LINER):
@@ -617,10 +612,10 @@ def w_solid_a(mb):
 
 
 def w_solid_b(mb):
-    """Two proud panel mouldings + a string course."""
+    """Two proud panel mouldings. No string course -- the extra band under the
+    cornice made this the odd one out against every other wall."""
     shell(mb, HW, [])
     bands(mb, HW, [])
-    string_course(mb, HW, [])
     w = M(WHITE)
     for cx in (-1.0, 1.0):
         x0, x1, z0, z1 = cx - 0.72, cx + 0.72, 1.75, 5.45
