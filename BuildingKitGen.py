@@ -86,7 +86,6 @@ STR_B, STR_T, STR_P = 5.95, 6.30, 0.14         # optional string course
 
 # Interior: skirting, panelled wainscot, dado rail, then the colour field.
 SKIRT_T = 0.45
-WAIN_T, DADO_T = 1.45, 1.62
 # STACKING: a wall's top face at z = H is the next storey's floor datum, so the
 # floor/roof slab is authored DOWNWARD from it (-DECK_T -> 0). That puts every
 # ceiling at CEIL_Z and keeps the storey pitch exactly H, which is what lets a
@@ -102,9 +101,15 @@ MULL = 0.20                  # mullion / glazing bar
 OVL = 0.03                   # trim lap -- see casing()
 
 WIN_W, WIN_H, WIN_S = 1.40, 4.00, 1.50         # head 5.50
+
+# The dado rail tops out exactly where a window's interior architrave springs
+# from (sill minus the architrave width), so on the room side the panelling and
+# the window frame meet on one line instead of the frame crossing the wainscot.
+DADO_T = WIN_S - ICASE
+WAIN_T = DADO_T - 0.17
 WIDE_W = 2.60
 FRENCH_S = WIN_S              # every window sill lines up
-SHOP_W, SHOP_S = 2.80, 0.55
+SHOP_W, SHOP_S = 2.80, WIN_S     # sill on the same line as every window
 SHUT_W, SHUT_T = 0.52, 0.12  # open shutter leaf: width, thickness
 HEAD_Z = WIN_S + WIN_H                         # 5.50 -- everything lines up
 
@@ -516,9 +521,8 @@ def casing(mb, op, sill=True, entab=0.0, case=None, case_p=None, hw=HW):
         sl(mb, max(x0 - cs - 0.30, -hw), min(x1 + cs + 0.30, hw),
            -HT - cp - 0.40, -HT + 0.001,
            zf + entab * 0.78, zf + entab, w)                         # corona
-        for cx in (x0 + 0.10, x1 - 0.10):                            # consoles
-            sl(mb, cx - 0.10, cx + 0.10, -HT - cp - 0.30, -HT + 0.001,
-               zf + 0.04, zf + entab * 0.52, w)
+        # No console brackets in the frieze: the vertical stubs read as braces
+        # propping the cornice up rather than as ornament.
     iy0, iy1 = HT - 0.001, HT + ICASE_P
     zi = z0 - (ICASE if sill else 0.0)
     sl(mb, x0 - ICASE, x0 + OVL, iy0, iy1, zi, z1 + ICASE, w)
@@ -681,16 +685,15 @@ def w_win_twin(mb):
 
 
 def w_shopfront(mb):
+    # Sill sits on the common line now, so the stall riser is gone -- it ran
+    # up from the ground and would have buried the plinth. The wide opening,
+    # big two-row panes and signage fascia keep this piece distinct.
     op = (-SHOP_W / 2, SHOP_W / 2, SHOP_S, HEAD_Z)
     reveal(mb, op, sill=True)
-    casing(mb, op, sill=False, entab=0.72)
+    casing(mb, op, sill=True, entab=0.72)
     glazing(mb, *op, nv=3, nh=2)
     shell(mb, HW, [op])
     bands(mb, HW, [op])
-    sl(mb, op[0] - CASE, op[1] + CASE, -HT - CASE_P - 0.02, -HT + 0.001,
-       0.0, SHOP_S, M(BODY))
-    sl(mb, max(op[0] - CASE - 0.08, -HW), min(op[1] + CASE + 0.08, HW),
-       -HT - CASE_P - 0.14, -HT + 0.001, SHOP_S - 0.18, SHOP_S, M(WHITE))
 
 
 def door_bay(mb, hw, ow, oh, leaf_top, case, liner, case_p, pilaster=0.0):
