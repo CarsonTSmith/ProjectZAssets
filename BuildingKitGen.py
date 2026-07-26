@@ -87,7 +87,13 @@ STR_B, STR_T, STR_P = 5.95, 6.30, 0.14         # optional string course
 # Interior: skirting, panelled wainscot, dado rail, then the colour field.
 SKIRT_T = 0.45
 WAIN_T, DADO_T = 1.45, 1.62
-ICORN_B = 7.40
+# STACKING: a wall's top face at z = H is the next storey's floor datum, so the
+# floor/roof slab is authored DOWNWARD from it (-DECK_T -> 0). That puts every
+# ceiling at CEIL_Z and keeps the storey pitch exactly H, which is what lets a
+# wall be dropped at z = 0, 8, 16 ... and still line up.
+DECK_T = 0.30
+CEIL_Z = 8.0 - DECK_T                          # 7.70 -- underside of the slab
+ICORN_B = 7.10                                 # interior cornice meets it
 
 CASE, CASE_P = 0.34, 0.26    # exterior architrave
 ICASE, ICASE_P = 0.26, 0.14  # interior architrave
@@ -114,6 +120,24 @@ DG_W, DG_HEAD, DG_LEAF_T = 3.60, 6.10, 4.70         # clear 3.24 m
 DG_CASE, DG_LINER, DG_CASE_P = 0.44, 0.18, 0.34
 DG_PILASTER = 3.00                                  # flanking pilaster centres
 
+# Anything that swings is its OWN mesh, with its origin on the hinge axis so
+# Unity can rotate it about local Z (Blender) / Y (Unity) and nothing else.
+# These are the hinge offsets in module-local X: drop the leaf at the wall's
+# transform +/- the offset, no other displacement.
+DOOR_HINGE = DOOR_W / 2 - DOOR_LINER - 0.02         # 1.48
+DOOR_LEAF_W = DOOR_HINGE - 0.03                     # 1.45
+DG_HINGE = DG_W / 2 - DG_LINER - 0.02               # 1.60
+DG_LEAF_W = DG_HINGE - 0.03                         # 1.57
+# The openable window is the WIDE one -- a pair of casements big enough to read
+# as french doors when they part in the middle. No shutters on this piece:
+# 2.80 + two 0.34 architraves already leaves only 0.26 m of wall each side.
+# Sill is set so the exterior sill shelf clears the plinth cap (0.80): any
+# lower and the shelf grows down into the plinth.
+OPEN_W, OPEN_SILL, OPEN_H = 2.80, 1.40, 4.10        # head 5.50, as everything
+SASH_HINGE = OPEN_W / 2 - LINER                     # 1.24
+SASH_W = SASH_HINGE - 0.01                          # 1.23
+SASH_Z0, SASH_Z1 = OPEN_SILL + LINER, OPEN_SILL + OPEN_H - LINER
+
 # Quoins reach QUOIN_L - HT = 0.40 m into the neighbouring bay, so the window
 # group (glass + architrave + both shutters) is sized to keep 0.44 m of plain
 # wall at each module edge. Widen the window or the shutters and the corner
@@ -124,14 +148,26 @@ QUOIN_H = 0.46                                 # nominal course height
 
 GROUND_Z = -0.45             # exterior pavement top
 FND = 0.45                   # podium height (GROUND_Z -> 0)
-DECK_T = 0.30
 PARA_H = 1.00
 
 # ---------------------------------------------------------------- palette --
-WHITE = "White plaster"
-STONE = "PZ_M_Stone"
-TILE = "Stone tiles"
-WOOD = "Stylized Wooden Planks"
+# Sources are the user's own library materials; the kit never references them
+# directly, it aliases every one into a BK_* namespace so an exported FBX
+# carries a clean, self-contained material list.
+SRC_PLASTER = "White plaster"
+SRC_STONE = "PZ_M_Stone"
+SRC_TILE = "Stone tiles"
+SRC_WOOD = "Stylized Wooden Planks"
+# Picked by hand on BK_Door_Leaf_L and adopted for every leaf: a real wood pair
+# and a real metal, rather than the tinted plaster stand-ins they replaced.
+SRC_DOOR_FRAME = "Stylized Vertical Wood"     # stiles, rails, raised fields
+SRC_DOOR_PANEL = "Wood.002"                   # recessed panel ground
+SRC_BRASS = "Brushed Brass"                   # pull bars, kick strip, handles
+
+WHITE = PFX + "Trim"
+STONE = PFX + "Stone"
+TILE = PFX + "Floor"
+WOOD = PFX + "Wood"
 
 BODY = PFX + "Body"
 INNER = PFX + "Inner"
@@ -141,6 +177,7 @@ SHUTM = PFX + "Shutter"
 BRASS = PFX + "Brass"
 GLASS = PFX + "Glass"
 DOORM = PFX + "DoorLeaf"
+DPANEL = PFX + "DoorPanel"
 DECK = PFX + "RoofDeck"
 PAVE = PFX + "Paving"
 LEAF = PFX + "Foliage"
@@ -176,13 +213,35 @@ INNERMATS = []
 # what makes the plaster run through a module join without a seam.
 UVS = {
     WHITE: 0.5, BODY: 0.5, INNER: 0.5, CEIL: 0.5, ACCENT: 0.5, SHUTM: 0.5,
-    BRASS: 0.5, GLASS: 0.5, DOORM: 1.0, DECK: 0.5, LEAF: 0.5,
+    BRASS: 0.5, GLASS: 0.5, DOORM: 1.0, DPANEL: 0.5, DECK: 0.5, LEAF: 0.5,
     STONE: 0.5, TILE: 0.25, WOOD: 1.0, PAVE: 0.25, STAGE: 0.25,
 }
 
 
+# ---------------------------------------------------------- material slots --
+# Every piece's slots are written in THIS order, subset to what it actually
+# uses. That makes the two swappable ones land at fixed indices on every wall
+# piece -- slot 0 is the exterior colour and slot 1 the interior colour -- so a
+# Unity prefab variant, or a script walking Renderer.sharedMaterials, can
+# recolour any piece in the kit without looking up names.
+CANON_MATS = [BODY, INNER, WHITE, ACCENT, GLASS, STONE, TILE, DOORM, DPANEL,
+              SHUTM, BRASS, DECK, CEIL, LEAF, WOOD, PAVE, STAGE]
+
+
 def M(n):
     return bpy.data.materials[n]
+
+
+def canonicalise(mb):
+    """Reorder a piece's material slots into CANON_MATS order, remapping the
+    faces. Left alone, slots come out in first-touched order, which differs from
+    piece to piece and makes slot indices useless on the Unity side."""
+    rank = {n: i for i, n in enumerate(CANON_MATS)}
+    order = sorted(range(len(mb.mats)), key=lambda i: rank.get(mb.mats[i].name, 999))
+    remap = {old: new for new, old in enumerate(order)}
+    for f in mb.bm.faces:
+        f.material_index = remap[f.material_index]
+    mb.mats = [mb.mats[i] for i in order]
 
 
 # ------------------------------------------------------------- primitives --
@@ -246,10 +305,48 @@ def mark_bevel_weights(ob, planes, angle_deg=40.0):
     me.update()
 
 
+def fix_tilted_uvs(ob):
+    """Re-project faces that are NOT axis-aligned into their own plane.
+
+    The kit's planar projection picks a world axis per face, which is exactly
+    what makes the modules tile -- but on a tilted face it foreshortens one
+    direction only, so the texture reads as stretched. Bracket undersides,
+    awning slopes and the planter foliage were running ~25-30% short. Rebuilding
+    those in a tangent frame makes them isotropic; axis-aligned faces are left
+    strictly alone so the tiling guarantee is untouched. The frame is built from
+    the face normal alone, so coplanar neighbours stay continuous."""
+    me = ob.data
+    if not me.uv_layers:
+        return 0
+    uvl = me.uv_layers.active.data
+    fixed = 0
+    for p in me.polygons:
+        n = p.normal
+        if max(abs(n.x), abs(n.y), abs(n.z)) > 0.999:
+            continue
+        mat = (me.materials[p.material_index]
+               if p.material_index < len(me.materials) else None)
+        s = BK.MAT_UV_SCALE.get(mat.name, 1.0) if mat else 1.0
+        up = Vector((0.0, 0.0, 1.0)) if abs(n.z) < 0.9 else Vector((1.0, 0.0, 0.0))
+        t = n.cross(up)
+        if t.length < 1e-6:
+            continue
+        t.normalize()
+        b = n.cross(t)
+        for li in p.loop_indices:
+            v = me.vertices[me.loops[li].vertex_index].co
+            uvl[li].uv = (v.dot(t) * s, v.dot(b) * s)
+        fixed += 1
+    return fixed
+
+
 def out(mb, coll, loc, bevel=0.025, segments=1, seam=None):
     """Finish with LOCAL uvs (origin 0,0,0) then move the object into place --
     keeping the projection local is what makes instances tile in Unity."""
+    canonicalise(mb)
     ob = mb.finish(coll, origin=(0, 0, 0), bevel=bevel, uv_scale=1.0)
+    ob.data.name = ob.name          # mesh name is what Unity shows
+    fix_tilted_uvs(ob)
     ob.location = Vector(loc)
     md = ob.modifiers.get("Bevel")
     if md:
@@ -312,13 +409,16 @@ def bands(mb, hw, opens):
     rail and cornice inside. Continuous horizontal trim is the main thing hiding
     the vertical module joins, and it is what carries the 'chunky' read."""
     w = M(WHITE)
+    # split on the trim footprint where casing() recorded one, else the opening
+    ext_op = getattr(mb, "env_ext", None) or opens
+    int_op = getattr(mb, "env_int", None) or opens
 
     def ext(z0, z1, p):
-        for a, b in spans(hw, opens, z0, z1):
+        for a, b in spans(hw, ext_op, z0, z1):
             sl(mb, a, b, -HT - p, -HT + 0.001, z0, z1, w)
 
     def inn(z0, z1, p):
-        for a, b in spans(hw, opens, z0, z1):
+        for a, b in spans(hw, int_op, z0, z1):
             sl(mb, a, b, HT - 0.001, HT + p, z0, z1, w)
 
     ext(0.0, PL_B, PL_P1)
@@ -331,9 +431,9 @@ def bands(mb, hw, opens):
     inn(SKIRT_T, WAIN_T, 0.05)                 # wainscot ground
     inn(WAIN_T, DADO_T, 0.13)                  # dado rail
     inn(ICORN_B, ICORN_B + 0.30, 0.10)
-    inn(ICORN_B + 0.30, H, 0.17)
+    inn(ICORN_B + 0.30, CEIL_Z, 0.17)
     # raised panels on the wainscot, two to a full module
-    for a, b in spans(hw, opens, SKIRT_T + 0.12, WAIN_T - 0.12):
+    for a, b in spans(hw, int_op, SKIRT_T + 0.12, WAIN_T - 0.12):
         n = max(1, int(round((b - a) / 1.9)))
         for k in range(n):
             p0 = a + (b - a) * k / n + 0.16
@@ -379,6 +479,17 @@ def casing(mb, op, sill=True, entab=0.0, case=None, case_p=None, hw=HW):
     cs = CASE if case is None else case
     cp = CASE_P if case_p is None else case_p
     zb = z0 - cs if sill else z0
+    # Record the footprint the trim actually occupies, so bands() can stop the
+    # plinth, wainscot and dado rail AT the surround instead of running through
+    # it. Splitting on the bare opening is not enough -- the architrave is
+    # wider and drops below the sill, which is what makes a low window look
+    # like it is punched through the panelling.
+    if not hasattr(mb, "env_ext"):
+        mb.env_ext, mb.env_int = [], []
+    mb.env_ext.append((x0 - cs, x1 + cs,
+                       (z0 - cs - 0.22) if sill else z0, z1 + cs + entab))
+    mb.env_int.append((x0 - ICASE, x1 + ICASE,
+                       (z0 - ICASE) if sill else z0, z1 + ICASE))
     # two-step profile: a wide flat band with a proud outer bead
     for p, inset in ((cp - 0.10, 0.0), (cp, 0.10)):
         ey0, ey1 = -HT - p, -HT + 0.001
@@ -388,11 +499,9 @@ def casing(mb, op, sill=True, entab=0.0, case=None, case_p=None, hw=HW):
         if sill:
             sl(mb, x0, x1, ey0, ey1, z0 - cs + inset, z0 + OVL, w)
     if sill:
+        # sill shelf only -- no corbels under it
         sl(mb, x0 - cs - 0.12, x1 + cs + 0.12, -HT - cp - 0.20,
            -HT + 0.001, z0 - cs - 0.22, z0 - cs, w)
-        for cx in (x0 - cs + 0.14, x1 + cs - 0.14):   # sill corbels
-            sl(mb, cx - 0.09, cx + 0.09, -HT - cp - 0.20, -HT + 0.001,
-               z0 - cs - 0.52, z0 - cs - 0.22, w)
     if entab:
         zf = z1 + cs
         # Clamped to the PIECE (hw), not the 4 m module -- the grand door is two
@@ -634,32 +743,118 @@ def door_bay(mb, hw, ow, oh, leaf_top, case, liner, case_p, pilaster=0.0):
     glazing(mb, x0, x1, leaf_top + 0.26, oh - liner, 5, 2, inset=0.0)
     sl(mb, x0, x1, -HT - 0.24, HT + 0.16, -0.08, 0.08, st)      # threshold
 
+    # NOTE: no leaves here -- they are separate meshes so they can swing in
+    # game. See door_leaf(). The frame, fanlight and threshold stay put.
+
+
+# ------------------------------------------------------------- openables ---
+def door_leaf(mb, width, leaf_top, side):
+    """One raised-and-fielded door leaf, ORIGIN ON ITS HINGE.
+
+    side = -1 is the left leaf (hinge on the left, geometry runs +X), side = +1
+    the right (geometry runs -X). Local z is still the wall's floor datum, so
+    the leaf's transform relative to its wall is a pure X offset -- rotate it
+    about local Z in Blender / Y in Unity and it swings correctly."""
+    lx0, lx1 = (0.0, width) if side < 0 else (-width, 0.0)
+    free = lx1 if side < 0 else lx0          # the edge away from the hinge
+    d, a, br, w = M(DOORM), M(DPANEL), M(BRASS), M(WHITE)
     LT, SW, RL = leaf_top, 0.30, 0.30
     rails = [(0.08, 0.08 + RL * 1.8), (1.15, 1.15 + RL * 1.2),
              (LT * 0.60, LT * 0.60 + RL * 1.15), (LT - RL * 1.3, LT)]
-    mid = 0.0
-    for i, (lx0, lx1) in enumerate(((x0 + 0.02, mid - 0.03), (mid + 0.03, x1 - 0.02))):
-        sl(mb, lx0, lx1, -0.07, 0.05, 0.08, LT, a)              # panel ground
-        for yy0, yy1 in ((-0.15, -0.065), (0.045, 0.13)):       # both faces
-            for r0, r1 in rails:
-                sl(mb, lx0, lx1, yy0, yy1, r0, r1, d)
-            sl(mb, lx0, lx0 + SW, yy0, yy1, 0.08, LT, d)        # stiles
-            sl(mb, lx1 - SW, lx1, yy0, yy1, 0.08, LT, d)
-            for (_, f0), (f1, _) in zip(rails[:-1], rails[1:]):
-                if f1 - f0 < 0.34:
-                    continue
-                q0, q1 = lx0 + SW + 0.11, lx1 - SW - 0.11
-                # field sits 30 mm below the rail plane -- relief, not inlay
-                fy0, fy1 = (yy0 + 0.03, yy1) if yy0 < 0 else (yy0, yy1 - 0.03)
-                sl(mb, q0, q1, fy0, fy1, f0 + 0.11, f1 - 0.11, d)
-        hx = mid - 0.38 if i == 0 else mid + 0.38
-        for by0, by1, sy0, sy1 in ((-0.355, -0.255, -0.255, -0.145),
-                                   (0.225, 0.325, 0.125, 0.225)):
-            sl(mb, hx - 0.05, hx + 0.05, by0, by1, 1.10, 3.10, br)   # pull bar
-            for hz in (1.20, 3.00):
-                sl(mb, hx - 0.04, hx + 0.04, sy0, sy1, hz - 0.04, hz + 0.04, br)
-        sl(mb, lx0 + 0.34, lx1 - 0.34, -0.165, -0.145, 0.16, 0.36, br)  # kick strip
-    sl(mb, mid - 0.04, mid + 0.04, -0.18, 0.16, 0.08, LT, w)    # astragal
+    sl(mb, lx0, lx1, -0.07, 0.05, 0.08, LT, a)                  # panel ground
+    for yy0, yy1 in ((-0.15, -0.065), (0.045, 0.13)):           # both faces
+        for r0, r1 in rails:
+            sl(mb, lx0, lx1, yy0, yy1, r0, r1, d)
+        sl(mb, lx0, lx0 + SW, yy0, yy1, 0.08, LT, d)            # stiles
+        sl(mb, lx1 - SW, lx1, yy0, yy1, 0.08, LT, d)
+        for (_, f0), (f1, _) in zip(rails[:-1], rails[1:]):
+            if f1 - f0 < 0.34:
+                continue
+            q0, q1 = lx0 + SW + 0.11, lx1 - SW - 0.11
+            # field sits 30 mm below the rail plane -- relief, not inlay
+            fy0, fy1 = (yy0 + 0.03, yy1) if yy0 < 0 else (yy0, yy1 - 0.03)
+            sl(mb, q0, q1, fy0, fy1, f0 + 0.11, f1 - 0.11, d)
+    hx = free - 0.38 if side < 0 else free + 0.38
+    for by0, by1, sy0, sy1 in ((-0.355, -0.255, -0.255, -0.145),
+                               (0.225, 0.325, 0.125, 0.225)):
+        sl(mb, hx - 0.05, hx + 0.05, by0, by1, 1.10, 3.10, br)  # pull bar
+        for hz in (1.20, 3.00):
+            sl(mb, hx - 0.04, hx + 0.04, sy0, sy1, hz - 0.04, hz + 0.04, br)
+    sl(mb, lx0 + 0.34, lx1 - 0.34, -0.165, -0.145, 0.16, 0.36, br)  # kick strip
+    if side < 0:        # meeting bead, on the left leaf, covers the joint
+        sl(mb, free - 0.02, free + 0.06, -0.18, 0.16, 0.08, LT, w)
+
+
+def win_sash(mb, width, z0, z1, side, nv=2, nh=4):
+    """One casement sash, ORIGIN ON ITS HINGE -- same convention as door_leaf,
+    so the pair opens out from the middle exactly like a double door."""
+    lx0, lx1 = (0.0, width) if side < 0 else (-width, 0.0)
+    free = lx1 if side < 0 else lx0
+    w, g, br = M(WHITE), M(GLASS), M(BRASS)
+    y0, y1 = -0.07, 0.07
+    st, rl = 0.12, 0.16
+    sl(mb, lx0, lx1, -0.025, 0.025, z0, z1, g)                  # glass
+    sl(mb, lx0, lx0 + st, y0, y1, z0, z1, w)                    # stiles
+    sl(mb, lx1 - st, lx1, y0, y1, z0, z1, w)
+    sl(mb, lx0, lx1, y0, y1, z0, z0 + rl, w)                    # rails
+    sl(mb, lx0, lx1, y0, y1, z1 - rl, z1, w)
+    for k in range(1, nh):                                      # glazing bars
+        zc = z0 + (z1 - z0) * k / float(nh)
+        sl(mb, lx0, lx1, y0, y1, zc - 0.055, zc + 0.055, w)
+    for k in range(1, nv):
+        xc = lx0 + (lx1 - lx0) * k / float(nv)
+        sl(mb, xc - 0.055, xc + 0.055, y0, y1, z0, z1, w)
+    hx = free - 0.05 if side < 0 else free + 0.05
+    zc = z0 + (z1 - z0) * 0.42
+    sl(mb, hx - 0.035, hx + 0.035, y1, y1 + 0.11, zc, zc + 0.10, br)   # handle
+    sl(mb, hx - 0.03, hx + 0.03, y1 + 0.07, y1 + 0.11, zc - 0.34, zc + 0.06, br)
+    if side < 0:        # meeting bead
+        sl(mb, free - 0.015, free + 0.045, -0.05, 0.05, z0, z1, w)
+
+
+def o_door_leaf_l(mb):
+    door_leaf(mb, DOOR_LEAF_W, DOOR_LEAF_T, -1)
+
+
+def o_door_leaf_r(mb):
+    door_leaf(mb, DOOR_LEAF_W, DOOR_LEAF_T, 1)
+
+
+def o_door_grand_leaf_l(mb):
+    door_leaf(mb, DG_LEAF_W, DG_LEAF_T, -1)
+
+
+def o_door_grand_leaf_r(mb):
+    door_leaf(mb, DG_LEAF_W, DG_LEAF_T, 1)
+
+
+def o_win_sash_l(mb):
+    win_sash(mb, SASH_W, SASH_Z0, SASH_Z1, -1)
+
+
+def o_win_sash_r(mb):
+    win_sash(mb, SASH_W, SASH_Z0, SASH_Z1, 1)
+
+
+OPENABLE = [
+    ("Door_Leaf_L",        o_door_leaf_l),
+    ("Door_Leaf_R",        o_door_leaf_r),
+    ("Door_Grand_Leaf_L",  o_door_grand_leaf_l),
+    ("Door_Grand_Leaf_R",  o_door_grand_leaf_r),
+    ("Win_Sash_L",         o_win_sash_l),
+    ("Win_Sash_R",         o_win_sash_r),
+]
+
+
+def w_win_open(mb):
+    """Wide casement window: the opening is left EMPTY and filled by
+    Win_Sash_L/R, which hinge at the jambs and part in the middle like a double
+    door. No shutters -- at 2.80 m the pair would not fit inside the module."""
+    op = (-OPEN_W / 2, OPEN_W / 2, OPEN_SILL, OPEN_SILL + OPEN_H)
+    reveal(mb, op, sill=True)
+    casing(mb, op, sill=True)
+    shell(mb, HW, [op])
+    bands(mb, HW, [op])
 
 
 def w_door(mb):
@@ -730,7 +925,7 @@ def w_corner_quoin(mb):
         block("x", QUOIN_S if long_on_y else QUOIN_L, z, z + qh, QUOIN_P)
     # interior skirting / dado / cornice returns
     for z0, z1, p in ((0.0, SKIRT_T, 0.11), (WAIN_T, DADO_T, 0.13),
-                      (ICORN_B, H, 0.15)):
+                      (ICORN_B, CEIL_Z, 0.15)):
         sl(mb, e, HT + p, HT - 0.001, HT + p, z0, z1, w)
         sl(mb, HT - 0.001, HT + p, e, HT + p, z0, z1, w)
 
@@ -740,7 +935,7 @@ def w_corner_inner(mb):
     h = CW / 2
     sl(mb, -h, h, -h, h, 0.0, H, M(INNER))
     for z0, z1, p in ((0.0, SKIRT_T, 0.05), (WAIN_T, DADO_T, 0.06),
-                      (ICORN_B, H, 0.07)):
+                      (ICORN_B, CEIL_Z, 0.07)):
         sl(mb, -h - p, h + p, -h - p, h + p, z0, z1, M(WHITE))
 
 
@@ -752,6 +947,7 @@ WALLS = [
     ("Wall_Win_Shut",   w_win_shut),
     ("Wall_Win_B",      w_win_b),
     ("Wall_Win_C",      w_win_c),
+    ("Wall_Win_Open",   w_win_open),
     ("Wall_Win_Twin",   w_win_twin),
     ("Wall_Shopfront",  w_shopfront),
     ("Wall_Door",       w_door),
@@ -765,8 +961,18 @@ WALLS = [
 
 # ---------------------------------------------------------- roof variants --
 def r_deck(mb):
-    sl(mb, -HW, HW, -HW, HW, 0.0, DECK_T, M(DECK),
+    """Roof slab. Authored -DECK_T -> 0 so its TOP is the storey datum: drop it
+    at z = 8 and the roof surface is at 8, with the parapet sitting on it."""
+    sl(mb, -HW, HW, -HW, HW, -DECK_T, 0.0, M(DECK),
        {"-z": M(CEIL), "+z": M(DECK)})
+
+
+def r_floor_storey(mb):
+    """Intermediate floor for stacked walls: walking surface on top, finished
+    ceiling underneath. Same -DECK_T -> 0 authoring as the roof slab, so a
+    storey is exactly H tall whether it is capped by roof or by another floor."""
+    sl(mb, -HW, HW, -HW, HW, -DECK_T, 0.0, M(TILE),
+       {"-z": M(CEIL), "+z": M(TILE)})
 
 
 def r_parapet(mb):
@@ -857,6 +1063,7 @@ def r_skylight(mb):
 
 ROOFS = [
     ("Roof_Deck_4x4",     r_deck),
+    ("Floor_Storey_4x4",  r_floor_storey),
     ("Parapet_Straight",  r_parapet),
     ("Parapet_Deco",      r_parapet_deco),
     ("Parapet_Grand",     r_parapet_grand),
@@ -1022,9 +1229,33 @@ DETAILS = [
 
 
 # ------------------------------------------------------------- materials ---
+def alias(src, name):
+    """Namespaced copy of a library material. tint() would work too but it
+    reduces the source to luminance, which turns Stone tiles' gold grout grey.
+
+    The SOURCE is given a fake user: a hand-picked library material whose only
+    user is a kit object becomes an orphan the moment the kit is rebuilt, and
+    is then one purge away from being gone for good."""
+    s = bpy.data.materials.get(src)
+    if s is None:
+        raise KeyError("source material %r is missing -- append it before "
+                       "rebuilding" % src)
+    s.use_fake_user = True
+    if name in bpy.data.materials:
+        bpy.data.materials.remove(bpy.data.materials[name])
+    m = s.copy()
+    m.name = name
+    m.use_fake_user = True
+    return m
+
+
 def materials():
     del BODYMATS[:]
     del INNERMATS[:]
+    alias(SRC_PLASTER, WHITE)
+    alias(SRC_STONE, STONE)
+    alias(SRC_TILE, TILE)
+    alias(SRC_WOOD, WOOD)
     for nm, hexv in PALETTE:
         BODYMATS.append(BK.tint(WHITE, PFX + "Body_" + nm, srgb(hexv), roughness=0.62))
         UVS[PFX + "Body_" + nm] = 0.5
@@ -1036,12 +1267,13 @@ def materials():
     BK.tint(WHITE, CEIL, srgb(0xF2ECDE), roughness=0.75)
     BK.tint(WHITE, ACCENT, srgb(0x27406E), roughness=0.55)
     BK.tint(WOOD, SHUTM, srgb(0x256B78), roughness=0.52)
-    BK.tint(WHITE, BRASS, srgb(0xC8912C), roughness=0.38)
+    alias(SRC_BRASS, BRASS)
     BK.tint(WHITE, DECK, srgb(0xC3B7A2), roughness=0.80)
     BK.tint(WHITE, LEAF, srgb(0x4C8B4A), roughness=0.75)
     BK.tint(TILE, PAVE, srgb(0xCFC6B3), roughness=0.72)
     BK.tint(TILE, STAGE, srgb(0x6E7C86), roughness=0.80)
-    BK.tint(WOOD, DOORM, srgb(0x1B4F49), roughness=0.48)
+    alias(SRC_DOOR_FRAME, DOORM)
+    alias(SRC_DOOR_PANEL, DPANEL)
     BK.flat(GLASS, srgb(0xB6DBE9), roughness=0.09)
     BK.flat(LABEL, srgb(0x2A2A2E), roughness=0.60)
 
@@ -1074,9 +1306,26 @@ def label(coll, text, loc):
 
 
 # ------------------------------------------------------------------ demo ---
-FACADE = ["Wall_Win_A", "Wall_Solid_B", "Wall_Win_B", "Wall_Win_Shut",
+FACADE = ["Wall_Win_A", "Wall_Solid_B", "Wall_Win_Open", "Wall_Win_Shut",
           "Wall_Door_Grand", "Wall_Win_C", "Wall_Shopfront", "Wall_Solid_C",
           "Wall_Win_A", "Wall_Win_Twin"]
+
+
+def place_leaves(coll, p, rot, body, inner, kind="door", angle=0.0):
+    """Hang a pair of leaves on a door bay. The hinge offset is a pure X shift
+    in the wall's local frame, so it just has to be rotated by the wall's own
+    yaw. Left leaf opens on -angle, right on +angle; 0 is shut."""
+    K = bpy.data.objects
+    if kind == "grand":
+        hinge, nm = DG_HINGE, ("Door_Grand_Leaf_L", "Door_Grand_Leaf_R")
+    elif kind == "sash":
+        hinge, nm = SASH_HINGE, ("Win_Sash_L", "Win_Sash_R")
+    else:
+        hinge, nm = DOOR_HINGE, ("Door_Leaf_L", "Door_Leaf_R")
+    c, s = math.cos(rot), math.sin(rot)
+    for sgn, name in ((-1.0, nm[0]), (1.0, nm[1])):
+        q = (p[0] + sgn * hinge * c, p[1] + sgn * hinge * s, p[2])
+        dup(K[PFX + name], coll, q, rot + sgn * angle, body, inner)
 
 
 def dup(src, coll, loc, rot=0.0, body=None, inner=None):
@@ -1089,50 +1338,80 @@ def dup(src, coll, loc, rot=0.0, body=None, inner=None):
     return ob
 
 
-def demo_building(coll, org, bays, body, inner, seq, deco=True):
+# Ground-floor-only pieces, and what an upper storey uses in their place. A
+# door or a shopfront on the first floor reads as a mistake.
+UPPER_SWAP = {"Wall_Door": "Wall_Win_C", "Wall_Door_Grand": "Wall_Win_B",
+              "Wall_Shopfront": "Wall_Win_B"}
+
+
+def demo_building(coll, org, bays, body, inner, seq, deco=True, storeys=1):
+    """`storeys` walls stacked on the same footprint at a pitch of H."""
     K = bpy.data.objects
     half = bays * W / 2.0
     ox, oy = org
-    idx = 0
+    top = storeys * H
+    for s in range(storeys):
+        z = s * H
+        ground = (s == 0)
+        idx = 0
+        for side, rot in (("S", 0.0), ("E", RAD(90)),
+                          ("N", RAD(180)), ("W", RAD(-90))):
+            for b in range(bays):
+                u = -half + W * (b + 0.5)
+                if side == "S":
+                    p = (ox + u, oy - half, z)
+                elif side == "N":
+                    p = (ox - u, oy + half, z)
+                elif side == "E":
+                    p = (ox + half, oy + u, z)
+                else:
+                    p = (ox - half, oy - u, z)
+                name = seq[idx % len(seq)]
+                idx += 1
+                if not ground:
+                    name = UPPER_SWAP.get(name, name)
+                dup(K[PFX + name], coll, p, rot, body, inner)
+                if name == "Wall_Win_Open":
+                    place_leaves(coll, p, rot, body, inner, "sash")
+                if ground:
+                    dup(K[PFX + "Foundation_4m"], coll, p, rot, body, inner)
+                    if name == "Wall_Door":
+                        place_leaves(coll, p, rot, body, inner, "door")
+                        dup(K[PFX + "Steps_4m"], coll, p, rot, body, inner)
+                    elif name == "Wall_Shopfront":
+                        dup(K[PFX + "Awning_4m"], coll, p, rot, body, inner)
+                if name == "Wall_Win_C":
+                    dup(K[PFX + "Balcony_4m"], coll, p, rot, body, inner)
+        for sx, sy, rot in ((-1, -1, 0.0), (1, -1, RAD(90)),
+                            (1, 1, RAD(180)), (-1, 1, RAD(-90))):
+            p = (ox + sx * half, oy + sy * half, z)
+            dup(K[PFX + "Corner_Quoin"], coll, p, rot, body, inner)
+            if ground:
+                dup(K[PFX + "Foundation_Corner"], coll, p, rot, body, inner)
+    for sx, sy, rot in ((-1, -1, 0.0), (1, -1, RAD(90)),
+                        (1, 1, RAD(180)), (-1, 1, RAD(-90))):
+        dup(K[PFX + "Parapet_Corner"], coll,
+            (ox + sx * half, oy + sy * half, top), rot, body, inner)
     for side, rot in (("S", 0.0), ("E", RAD(90)), ("N", RAD(180)), ("W", RAD(-90))):
         for b in range(bays):
             u = -half + W * (b + 0.5)
-            if side == "S":
-                p = (ox + u, oy - half, 0.0)
-            elif side == "N":
-                p = (ox - u, oy + half, 0.0)
-            elif side == "E":
-                p = (ox + half, oy + u, 0.0)
-            else:
-                p = (ox - half, oy - u, 0.0)
-            name = seq[idx % len(seq)]
-            idx += 1
-            dup(K[PFX + name], coll, p, rot, body, inner)
-            dup(K[PFX + "Foundation_4m"], coll, p, rot, body, inner)
+            q = {"S": (ox + u, oy - half), "N": (ox - u, oy + half),
+                 "E": (ox + half, oy + u), "W": (ox - half, oy - u)}[side]
             para = "Parapet_Deco" if (deco and b % 2 == 0) else "Parapet_Straight"
-            dup(K[PFX + para], coll, (p[0], p[1], H), rot, body, inner)
-            if name == "Wall_Door":
-                dup(K[PFX + "Steps_4m"], coll, p, rot, body, inner)
-            elif name == "Wall_Shopfront":
-                dup(K[PFX + "Awning_4m"], coll, p, rot, body, inner)
-            elif name == "Wall_Win_C":
-                dup(K[PFX + "Balcony_4m"], coll, p, rot, body, inner)
-    for sx, sy, rot in ((-1, -1, 0.0), (1, -1, RAD(90)),
-                        (1, 1, RAD(180)), (-1, 1, RAD(-90))):
-        p = (ox + sx * half, oy + sy * half, 0.0)
-        dup(K[PFX + "Corner_Quoin"], coll, p, rot, body, inner)
-        dup(K[PFX + "Foundation_Corner"], coll, p, rot, body, inner)
-        dup(K[PFX + "Parapet_Corner"], coll, (p[0], p[1], H), rot, body, inner)
+            dup(K[PFX + para], coll, (q[0], q[1], top), rot, body, inner)
     for i in range(bays):
         for j in range(bays):
             p = (ox - half + W * (i + 0.5), oy - half + W * (j + 0.5), 0.0)
             dup(K[PFX + "Floor_4x4"], coll, p, 0.0, body, inner)
-            dup(K[PFX + "Roof_Deck_4x4"], coll, (p[0], p[1], H), 0.0, body, inner)
+            for s in range(1, storeys):        # intermediate floors
+                dup(K[PFX + "Floor_Storey_4x4"], coll, (p[0], p[1], s * H),
+                    0.0, body, inner)
+            dup(K[PFX + "Roof_Deck_4x4"], coll, (p[0], p[1], top), 0.0, body, inner)
     dup(K[PFX + "Roof_Fin_Sign"], coll,
-        (ox, oy + half - 1.2, H + DECK_T), RAD(180), body, inner)
-    dup(K[PFX + "Roof_Vent"], coll, (ox - half + 2.2, oy + 1.4, H + DECK_T), 0.0,
+        (ox, oy + half - 1.2, top), RAD(180), body, inner)
+    dup(K[PFX + "Roof_Vent"], coll, (ox - half + 2.2, oy + 1.4, top), 0.0,
         body, inner)
-    dup(K[PFX + "Roof_Skylight"], coll, (ox + 1.6, oy - 1.0, H + DECK_T), 0.0,
+    dup(K[PFX + "Roof_Skylight"], coll, (ox + 1.6, oy - 1.0, top), 0.0,
         body, inner)
 
 
@@ -1157,8 +1436,12 @@ def demo_run(coll, org, seq, body, inner):
         if name == "Wall_Door_Grand":
             dup(K[PFX + "Parapet_Grand"], coll, (p[0], p[1], H), 0.0, body, inner)
             dup(K[PFX + "Steps_Grand"], coll, p, 0.0, body, inner)
+            place_leaves(coll, p, 0.0, body, inner, "grand", angle=RAD(72))
         if name == "Wall_Door":
+            place_leaves(coll, p, 0.0, body, inner, "door")
             dup(K[PFX + "Steps_4m"], coll, p, 0.0, body, inner)
+        if name == "Wall_Win_Open":
+            place_leaves(coll, p, 0.0, body, inner, "sash", angle=RAD(55))
         if name == "Wall_Shopfront":
             dup(K[PFX + "Awning_4m"], coll, p, 0.0, body, inner)
             dup(K[PFX + "Blade_Sign"], coll, p, 0.0, body, inner)
@@ -1184,33 +1467,52 @@ SEAM_X4 = [("x", -HW), ("x", HW)]
 SEAM_X2 = [("x", -W2 / 2), ("x", W2 / 2)]
 SEAM_X8 = [("x", -DG_HW), ("x", DG_HW)]
 SEAM_XY4 = SEAM_X4 + [("y", -HW), ("y", HW)]
-SEAM_TILE = ("Roof_Deck_4x4", "Floor_4x4", "Pavement_4x4")
+# Walls also butt vertically when stacked into storeys, so z = 0 and z = H are
+# module boundaries too and must not be chamfered -- otherwise every floor line
+# carries the same hairline the vertical joints used to.
+SEAM_Z = [("z", 0.0), ("z", H)]
+SEAM_TILE = ("Roof_Deck_4x4", "Floor_Storey_4x4", "Floor_4x4", "Pavement_4x4")
 SEAM_RUN = ("Parapet_Straight", "Parapet_Deco", "Foundation_4m", "Kerb_4m",
             "Steps_4m", "Stoop_Landing")
 
 
 def seam_for(name):
     """Which planes of this piece butt against an identical neighbour."""
+    if name == "Wall_Door_Grand":
+        return SEAM_X8 + SEAM_Z
     if name.endswith("_Grand"):
         return SEAM_X8
     if name.startswith("Wall_Half"):
-        return SEAM_X2
+        return SEAM_X2 + SEAM_Z
     if name in SEAM_TILE:
         return SEAM_XY4
-    if name.startswith("Wall_") or name in SEAM_RUN:
+    if name.startswith("Corner_"):
+        return SEAM_Z
+    if name.startswith("Wall_"):
+        return SEAM_X4 + SEAM_Z
+    if name in SEAM_RUN:
         return SEAM_X4
     return None
 
 
 ROW_Y = {"Walls": 0.0, "Roof": 14.0, "Ground": 26.0, "Details": 38.0,
-         "Palette": 50.0}
+         "Palette": 50.0, "Openable": 62.0}
 STEP = 6.0
 DEMO_Y = -90.0
 RUN_Y = DEMO_Y - 46.0
+COLOUR_Y = DEMO_Y - 88.0     # one house per palette colour
 
 
 def build():
     BK.purge_coll(ROOT)
+    # Orphaned meshes from the previous build still hold the good names, so a
+    # rebuild produces BK_Wall_Win_A.021 -- which is then the mesh name Unity
+    # imports. Purge MESHES ONLY: a recursive orphan purge also deletes any
+    # library material whose sole user was a kit object, which silently
+    # destroys a material hand-assigned to a piece between rebuilds.
+    for me in list(bpy.data.meshes):
+        if me.users == 0:
+            bpy.data.meshes.remove(me)
     materials()
     BK.MAT_UV_SCALE.clear()
     BK.MAT_UV_SCALE.update(UVS)
@@ -1222,6 +1524,7 @@ def build():
     c_g = BK.ensure_coll(PFX + "Ground", root)
     c_d = BK.ensure_coll(PFX + "Details", root)
     c_p = BK.ensure_coll(PFX + "Palette", root)
+    c_o = BK.ensure_coll(PFX + "Openable", root)
     c_x = BK.ensure_coll(PFX + "Demo", root)
     c_l = BK.ensure_coll(PFX + "Preview", root)
     c_lgt = BK.ensure_coll(PFX + "Lighting", root)
@@ -1231,13 +1534,13 @@ def build():
     # row gets a sunken bay -- paving, kerbs and the podium are authored BELOW
     # the finished-floor datum, so on a stage at z=0 they are buried in it.
     ground_plane(c_l, "Stage_Front", 36.0, -7.0, 112.0, 58.0, top=0.0, mat=STAGE)
-    ground_plane(c_l, "Stage_Back", 36.0, 45.0, 112.0, 30.0, top=0.0, mat=STAGE)
+    ground_plane(c_l, "Stage_Back", 36.0, 50.0, 112.0, 44.0, top=0.0, mat=STAGE)
     ground_plane(c_l, "Stage_Sunken", 36.0, 26.0, 112.0, 12.0, top=-0.78,
                  mat=STAGE)
 
-    ci = 0
     for coll, items, row in ((c_w, WALLS, "Walls"), (c_r, ROOFS, "Roof"),
-                             (c_g, GROUNDS, "Ground"), (c_d, DETAILS, "Details")):
+                             (c_g, GROUNDS, "Ground"), (c_d, DETAILS, "Details"),
+                             (c_o, OPENABLE, "Openable")):
         y = ROW_Y[row]
         xcur = 0.0
         for name, fn in items:
@@ -1248,10 +1551,10 @@ def build():
             wid = 2.0 * DG_HW if name.endswith("_Grand") else W
             x = xcur + wid / 2.0 - W / 2.0
             xcur += wid + (STEP - W)
+            # left on the default BK_Body / BK_Inner: the catalogue is a
+            # buildable SET, and cycling a colour per piece made it impossible
+            # to read one house out of it
             ob = out(mb, coll, (x, y, 0.0), seam=seam_for(name))
-            recolor(ob, BODYMATS[ci % len(BODYMATS)],
-                    INNERMATS[(ci * 3) % len(INNERMATS)])
-            ci += 1
             label(c_l, name, (x, y + 0.9, -1.35))
         label(c_l, row.upper(), (-STEP - 1.0, y + 0.9, 1.2))
 
@@ -1290,18 +1593,31 @@ def build():
     demo_building(c_x, (-24.0, DEMO_Y), 3, BODYMATS[0], INNERMATS[0],
                   ["Wall_Door", "Wall_Win_A", "Wall_Win_B",
                    "Wall_Win_C", "Wall_Solid_B", "Wall_Win_Shut",
-                   "Wall_Win_Twin", "Wall_Solid_C", "Wall_Win_A",
+                   "Wall_Win_Open", "Wall_Win_Open", "Wall_Win_A",
                    "Wall_Win_B", "Wall_Solid_A", "Wall_Win_A"])
     demo_building(c_x, (2.0, DEMO_Y), 2, BODYMATS[1], INNERMATS[3],
                   ["Wall_Shopfront", "Wall_Win_A", "Wall_Win_B", "Wall_Solid_C",
                    "Wall_Win_C", "Wall_Solid_B", "Wall_Win_Shut", "Wall_Win_A"],
-                  deco=False)
+                  deco=False, storeys=2)
     demo_building(c_x, (26.0, DEMO_Y), 3, BODYMATS[4], INNERMATS[5],
                   ["Wall_Shopfront", "Wall_Win_B", "Wall_Solid_C",
                    "Wall_Win_A", "Wall_Win_C", "Wall_Win_Shut",
                    "Wall_Solid_A", "Wall_Win_B", "Wall_Win_A",
-                   "Wall_Solid_B", "Wall_Win_Twin", "Wall_Win_C"])
+                   "Wall_Solid_B", "Wall_Win_Twin", "Wall_Win_C"],
+                  storeys=3)
     demo_run(c_x, (8.0, RUN_Y), FACADE, BODYMATS[2], INNERMATS[2])
+
+    # One house per palette colour, all from the SAME meshes -- only the two
+    # colour slots differ. This is the "build me a yellow house" set.
+    c_c = BK.ensure_coll(PFX + "Colours", root)
+    ground_plane(c_c, "Colour_Ground", 8.0, COLOUR_Y, 176.0, 34.0)
+    for i, (nm, _) in enumerate(PALETTE):
+        demo_building(c_c, (8.0 + 20.0 * (i - 3.5), COLOUR_Y), 2,
+                      BODYMATS[i], INNERMATS[i],
+                      ["Wall_Door", "Wall_Win_A", "Wall_Win_Shut", "Wall_Win_B",
+                       "Wall_Win_A", "Wall_Solid_B", "Wall_Win_Twin", "Wall_Win_A"],
+                      deco=(i % 2 == 0), storeys=1 + (i % 2))
+        label(c_l, nm, (8.0 + 20.0 * (i - 3.5), COLOUR_Y - 7.0, -0.9))
     for i in range(12):
         dup(K[PFX + "Kerb_4m"], c_x, (8.0 + W * (i - 5.5), RUN_Y - 6.2, 0.0),
             0.0, None)
@@ -1388,11 +1704,53 @@ SHOTS = {
     "shutters":    ((18.0, -11.0, 3.6), (18.0, 0.0, 3.6), 42),
     "shut_closed": ((24.0, -11.0, 3.6), (24.0, 0.0, 3.6), 42),
     "quoin":       ((-40.0, DEMO_Y - 20.0, 4.2), (-30.0, DEMO_Y - 6.0, 4.4), 48),
-    "demo_hero":   ((-52.0, DEMO_Y - 40.0, 19.0), (2.0, DEMO_Y + 2.0, 5.0), 42),
+    "demo_hero":   ((-56.0, DEMO_Y - 46.0, 26.0), (4.0, DEMO_Y + 2.0, 9.0), 40),
+    "stack":       ((26.0, DEMO_Y - 44.0, 13.0), (26.0, DEMO_Y - 6.0, 13.0), 34),
+    "colours":     ((8.0, COLOUR_Y - 62.0, 9.0), (8.0, COLOUR_Y, 7.0), 26),
+    "colours_b":   ((-32.0, COLOUR_Y - 26.0, 8.0), (-12.0, COLOUR_Y, 6.0), 34),
     "demo_run":    ((8.0, RUN_Y - 52.0, 5.2), (8.0, RUN_Y, 5.2), 30),
     "demo_close":  ((-32.0, DEMO_Y - 22.0, 3.0), (-22.0, DEMO_Y - 4.0, 4.6), 34),
     "interior":    ((-25.5, DEMO_Y - 3.8, 1.68), (-23.0, DEMO_Y + 4.5, 2.6), 19),
 }
+
+
+def export_fbx(out_dir):
+    """One FBX per kit piece, exported AT THE ORIGIN so the Unity prefab pivot
+    is the module pivot, with the bevel applied and Unity's axis convention.
+
+    In Unity: import, extract materials, make each mesh a prefab. Every wall
+    piece's material slot 0 is BK_Body (exterior) and slot 1 is BK_Inner
+    (interior) -- see CANON_MATS -- so a per-colour prefab variant is two slot
+    overrides and no new geometry."""
+    import os
+    os.makedirs(out_dir, exist_ok=True)
+    scene = bpy.data.scenes[SCENE]
+    view = scene.view_layers[0]
+    written = []
+    for cn in (PFX + "Walls", PFX + "Roof", PFX + "Ground", PFX + "Details",
+               PFX + "Openable"):
+        for ob in list(bpy.data.collections[cn].objects):
+            if ob.type != "MESH":
+                continue
+            keep = ob.location.copy()
+            ob.location = (0.0, 0.0, 0.0)
+            for o in view.objects:
+                o.select_set(False, view_layer=view)
+            ob.select_set(True, view_layer=view)
+            view.objects.active = ob
+            fp = os.path.join(out_dir, ob.name + ".fbx")
+            # temp_override, not window.scene: the operator otherwise runs
+            # against whatever scene the UI happens to be showing
+            with bpy.context.temp_override(scene=scene, view_layer=view):
+                bpy.ops.export_scene.fbx(
+                    filepath=fp, use_selection=True, object_types={"MESH"},
+                    use_mesh_modifiers=True, mesh_smooth_type="FACE",
+                    apply_unit_scale=True, apply_scale_options="FBX_SCALE_NONE",
+                    bake_space_transform=False, axis_forward="-Z", axis_up="Y",
+                    path_mode="STRIP", use_triangles=False)
+            ob.location = keep
+            written.append(ob.name)
+    return written
 
 
 def aim(cam, loc, tgt, lens):
