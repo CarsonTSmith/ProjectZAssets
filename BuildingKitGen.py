@@ -355,6 +355,7 @@ def out(mb, coll, loc, bevel=0.025, segments=1, seam=None):
     md = ob.modifiers.get("Bevel")
     if md:
         md.segments = segments
+        seam = list(seam or []) + [("z", z) for z in getattr(mb, "zcuts", [])]
         if seam:
             mark_bevel_weights(ob, seam)
             md.limit_method = "WEIGHT"
@@ -386,6 +387,11 @@ def shell(mb, hw, opens, h=H, t=HT):
     body, inner = M(BODY), M(INNER)
     xs = sorted({-hw, hw} | {v for o in opens for v in (o[0], o[1])})
     zs = sorted({0.0, h} | {v for o in opens for v in (o[2], o[3])})
+    # An opening splits the wall into stacked rows, and the boxes either side of
+    # a row line abut coplanar. Bevelling those edges cuts a groove clean across
+    # the wall -- a "dent" in what should be a flat face. Hand the cut heights to
+    # out() so they are excluded, same as the module boundaries.
+    mb.zcuts = [z for z in zs if 1e-6 < z < h - 1e-6]
 
     def leaf(a, b, z0, z1):
         sl(mb, a, b, -t, 0.0, z0, z1, body)
@@ -625,22 +631,14 @@ def w_solid_b(mb):
 
 
 def w_solid_c(mb):
-    """Asymmetric: one pilaster strip, an accent inlay and a dentil frieze --
-    mirror it in X and you get a different-looking piece for free."""
+    """Asymmetric: a single pilaster strip against a plain wall. Mirror it in X
+    and you get a different-looking piece for free. No dentil frieze and no
+    wall plaque -- just the pilaster and the cornice above it."""
     shell(mb, HW, [])
     bands(mb, HW, [])
     sl(mb, -HW + 0.08, -HW + 0.80, -HT - 0.19, -HT + 0.001, PLINTH_T, CORN_B, M(WHITE))
     sl(mb, -HW + 0.02, -HW + 0.86, -HT - 0.25, -HT + 0.001, CORN_B - 0.34,
        CORN_B, M(WHITE))
-    sl(mb, -0.20, 1.75, -HT - 0.13, -HT + 0.001, 3.00, 5.00, M(WHITE))
-    sl(mb, -0.02, 1.57, -HT - 0.18, -HT + 0.001, 3.18, 4.82, M(BODY))
-    for k in range(3):
-        z = 3.50 + k * 0.60
-        sl(mb, 0.14, 1.41, -HT - 0.23, -HT + 0.001, z, z + 0.22, M(WHITE))
-    for k in range(9):                                        # dentils
-        cx = -HW + 0.95 + k * 0.34
-        sl(mb, cx, cx + 0.19, -HT - 0.26, -HT + 0.001, CORN_B - 0.30,
-           CORN_B - 0.04, M(WHITE))
 
 
 def w_win_a(mb):
