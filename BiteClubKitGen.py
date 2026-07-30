@@ -128,6 +128,54 @@ RING = 0.16                    # arch ring depth, every arch
 BEVEL_W, BEVEL_SEG, BEVEL_ANG = 0.024, 2, 38.0
 BEVEL_MIN = 2.0 * BEVEL_W      # thinnest a member may be and still chamfer fully
 
+# --------------------------------------------------- DATUM DECONFLICTION --
+# ★★ THE FLICKER, AND WHY THE PROJECTION LADDER ABOVE CANNOT FIX IT.
+# Every member here is a closed solid and members interpenetrate freely -- that
+# is how a head beam dies into a wall with no seam. Interpenetration is free,
+# because the buried faces sit inside solid and are never rasterised. What is
+# NOT free is two members ENDING ON THE SAME PLANE. The module datums are
+# exactly the planes where every member is REQUIRED to stop flush so that
+# modules butt on the lattice, so on z = H the shell's top face, the head beam's
+# cap and the heavy block over the post all land together: coplanar, all facing
+# +Z, three different materials. The depth buffer then has no basis to choose
+# between them and picks per PIXEL, per frame, so the top of the wall strobes
+# stone/wood as the camera moves. Measured on the built kit before this pass:
+# 1.20 m2 of exact coincidence on the top of EVERY wall module, another 1.20 on
+# every bottom, and 0.24-1.78 on each module end.
+# The ladder cannot help, because the whole meaning of a datum is that a member
+# may not back off it. So instead each datum plane gets exactly ONE owner and
+# every other member in the clash recedes by a hairline. The owner is the
+# largest face in the clash, which is both the surface the eye actually reads
+# (the beam cap on the wall top) and -- at x = +/-HW, where the shell's end cap
+# is always the biggest face by far -- the structural shell, so the butt joint
+# and the snapping lattice stay bit-exact and no seam can open.
+# ★ One rung is 0.5 mm: ~100x the depth resolution of a 24-bit buffer at the
+# 300 m far clip this project ships, 1/48 of the chamfer, and far under the
+# thinnest member in the kit (BAR, 0.06) so nothing is driven below BEVEL_MIN.
+DATUM_EPS = 0.0005
+# Greedy colouring keeps real recessions at one rung; the allowance is what
+# SEAM_BAND has to be able to hold, not a depth anyone reaches.
+DATUM_RANKS = 3
+# ★★ Recession moves an edge OFF the datum, and mark_bevel_weights() excludes
+# edges from chamfering by testing them against that datum. Left exact, a receded
+# trim end at a module joint would start getting the full 24 mm chamfer -- the
+# V-notch down every joint that the exclusion exists to prevent. So the
+# exclusion is a BAND wide enough to hold the whole recession ladder, not a
+# plane. Nothing in the kit is authored between 0.1 mm and 1.6 mm off a datum,
+# so the band cannot swallow an edge that was meant to be chamfered.
+SEAM_BAND = DATUM_RANKS * DATUM_EPS + 1e-4
+# An insert (a frame, a leaf, a grate) is a SEPARATE object sharing its host
+# wall's pivot, so the pass above -- which only ever sees one mesh -- is blind to
+# the clash between them. Two planes collide by construction: both are built
+# from the same constants, so the wall's chair rail and the frame's architrave
+# both stand at P2 and land on y = +/-(HT+P2) together (0.07 m2 of coplanar
+# joinery at eye level on every door wall), and every insert's underside lands
+# on the floor datum alongside the wall's. Joinery applied to a wall reads as
+# PROUD of the wall's own joinery, so an insert advances a hairline on the
+# wall-face planes; nothing but the wall's structural bottom may sit ON the
+# floor datum, so an insert lifts off it.
+INSERT_EPS = 0.0015
+
 # Stone quoin post at each module end. Full width (not a half post) because the
 # concept sheet draws a complete post on an isolated piece; two butted modules
 # then read as one 0.68 m column, which is a feature, not a seam. Wall_Plain
@@ -304,8 +352,11 @@ def mark_bevel_weights(ob, planes, angle_deg=38.0):
             w = 1.0
             for ax, val in planes:
                 i = "xyz".index(ax)
-                if (abs(e.verts[0].co[i] - val) < 1e-4
-                        and abs(e.verts[1].co[i] - val) < 1e-4):
+                # ★ a BAND, not a plane -- see SEAM_BAND: deconflict() parks
+                # receded trim ends up to two rungs off the datum and those
+                # edges must stay unchamfered too, or the notch comes back
+                if (abs(e.verts[0].co[i] - val) < SEAM_BAND
+                        and abs(e.verts[1].co[i] - val) < SEAM_BAND):
                     w = 0.0
                     break
         vals.append(w)
@@ -315,6 +366,207 @@ def mark_bevel_weights(ob, planes, angle_deg=38.0):
         at = me.attributes.new("bevel_weight_edge", "FLOAT", "EDGE")
     at.data.foreach_set("value", vals)
     me.update()
+
+
+def _plane_group(bm, i, val, sgn):
+    """Every face lying flat IN a datum plane and facing one way out of it."""
+    return [f for f in bm.faces
+            if f.normal[i] * sgn > 0.999
+            and all(abs(v.co[i] - val) < 1e-4 for v in f.verts)]
+
+
+def _surfaces(fs):
+    """Fuse the faces of one plane into surfaces that must move together.
+
+    ★ Faces that SHARE VERTS are one surface, and moving one of them alone would
+    tear the mesh. A corner's head beam lands on the top datum as three faces
+    meeting at the miter, and the welded shell's top is a run of coplanar
+    neighbours -- treated as separate candidates, the first one moved locks its
+    shared verts and every sibling has to be skipped, which silently leaves the
+    clash in place (0.64 m2 of it on each corner). Fused, the whole beam top
+    recedes as one and the surface stays watertight."""
+    parent = list(range(len(fs)))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    owner = {}
+    for p, f in enumerate(fs):
+        for v in f.verts:
+            if v.index in owner:
+                parent[find(p)] = find(owner[v.index])
+            else:
+                owner[v.index] = p
+    out = {}
+    for p in range(len(fs)):
+        out.setdefault(find(p), []).append(p)
+    return list(out.values())
+
+
+def _overlap_graph(surfs, fs, ax):
+    """Which surfaces in one plane actually cover each other.
+
+    Two ashlar blocks side by side in the same plane are not a clash and must not
+    be moved -- only surfaces whose footprints genuinely overlap are. Every
+    clashing face in this kit is an axis-aligned rectangle, so footprint overlap
+    is an interval test on the two in-plane axes; the 1e-4 margin keeps faces that
+    merely SHARE AN EDGE (the welded shell is full of those) out of the graph."""
+    a1, a2 = [k for k in (0, 1, 2) if k != ax]
+
+    def bbox(p):
+        c1 = [v.co[a1] for v in fs[p].verts]
+        c2 = [v.co[a2] for v in fs[p].verts]
+        return (min(c1), max(c1), min(c2), max(c2))
+
+    bb = [[bbox(p) for p in s] for s in surfs]
+    adj = {i: set() for i in range(len(surfs))}
+    for i in range(len(surfs)):
+        for j in range(i + 1, len(surfs)):
+            hit = False
+            for bp in bb[i]:
+                for bq in bb[j]:
+                    if (min(bp[1], bq[1]) - max(bp[0], bq[0]) > 1e-4
+                            and min(bp[3], bq[3]) - max(bp[2], bq[2]) > 1e-4):
+                        hit = True
+                        break
+                if hit:
+                    break
+            if hit:
+                adj[i].add(j)
+                adj[j].add(i)
+    return adj
+
+
+def deconflict(mb):
+    """Give every clashing plane ONE owner and recede the rest a hairline.
+
+    See DATUM_EPS. Runs on the assembled bmesh, so it catches every member
+    however it was emitted -- sl(), poly(), lpoly() alike -- instead of asking
+    thirty build functions to remember the rule, and it sweeps EVERY plane rather
+    than only the declared module datums: the bookcase carcass behind the secret
+    door and the grate's own frame clash on planes that are nobody's datum.
+
+    ★ GREEDY COLOURING, not a rank order. Ranking every face in a clash to its
+    own depth looks right and is wrong twice over. It buries deep members far
+    enough to open a visible gap, and -- because the depth ladder has to stop
+    somewhere -- it lands everything past the last rung back on ONE plane, which
+    is the clash again with extra steps. What actually has to hold is only that no
+    two OVERLAPPING faces share a plane, so each face takes the shallowest rung
+    none of its overlaps has taken. Sorting by area first hands rung 0 to the
+    biggest face, which is both the surface the eye reads (the beam cap crowning
+    the wall) and, at x = +/-HW, the structural shell -- so the butt joint and the
+    snapping lattice stay bit-exact. The head beam, skirting and chair rail do not
+    overlap EACH OTHER at a module end, so all three share rung 1 and the deepest
+    recession anywhere in the kit is one rung.
+
+    ★ Moving a face means moving its verts, and a member's cap verts are shared
+    ONLY with that member's own side faces: weld() runs per shell and de-dupes
+    nothing across members, so shortening a box here cannot drag a neighbour. The
+    guard still refuses to move a vert twice, so two faces that DID share verts
+    leave the plane together rather than tear apart."""
+    bm = mb.bm
+    bm.verts.index_update()
+    facing = {}
+    for f in bm.faces:
+        n = f.normal
+        ax = max(range(3), key=lambda i: abs(n[i]))
+        if abs(n[ax]) < 0.999:
+            continue            # tilted members carry no datum and no clash here
+        co = [v.co[ax] for v in f.verts]
+        if max(co) - min(co) > 1e-4:
+            continue            # not flat in its own plane
+        facing.setdefault((ax, 1 if n[ax] > 0 else -1), []).append(
+            (sum(co) / len(co), f))
+
+    # ★ Group by a SWEEP, not by a rounded key. The corner's L beam comes out of
+    # the miter maths 0.024 mm off the top datum -- flat to any tolerance that
+    # matters, and flickering just as hard as an exact coincidence, but a rounded
+    # bucket key drops it and its partner either side of a boundary and they are
+    # never compared. Anything closer than CLASH_GAP is one plane for this
+    # purpose; a rung is wider than CLASH_GAP, so faces already parked on
+    # separate rungs are never re-grouped and cannot cascade deeper.
+    CLASH_GAP = 0.6 * DATUM_EPS
+    groups = []
+    for (ax, sgn), items in facing.items():
+        items.sort(key=lambda t: t[0])
+        run = [items[0]]
+        for val, f in items[1:]:
+            if val - run[-1][0] > CLASH_GAP:
+                groups.append((ax, sgn, [g for _, g in run]))
+                run = []
+            run.append((val, f))
+        groups.append((ax, sgn, [g for _, g in run]))
+
+    moved = 0
+    done = set()
+    for ax, sgn, fs in groups:
+        if len(fs) < 2:
+            continue
+        surfs = _surfaces(fs)
+        if len(surfs) < 2:
+            continue
+        adj = _overlap_graph(surfs, fs, ax)
+        area = [sum(fs[p].calc_area() for p in s) for s in surfs]
+        rung = {}
+        for i in sorted(range(len(surfs)), key=lambda j: -area[j]):
+            if not adj[i]:
+                continue        # nothing covers it: it keeps the plane
+            taken = {rung[j] for j in adj[i] if j in rung}
+            r = 0
+            while r in taken:
+                r += 1
+            rung[i] = r
+            if r == 0:
+                continue
+            # ★ keyed by AXIS as well as vert: the block over a post caps the top
+            # datum AND the module end, so its corner verts have to be free to
+            # recede once in z and once in x. Keyed by vert alone, whichever plane
+            # ran first claimed them and the other clash survived the pass.
+            vs = {v.index: v for p in surfs[i] for v in fs[p].verts}
+            if any((ax, k) in done for k in vs):
+                continue
+            for k, v in vs.items():
+                v.co[ax] -= sgn * r * DATUM_EPS
+                done.add((ax, k))
+            moved += 1
+    return moved
+
+
+def lift_insert(mb):
+    """Take an insert off the planes it shares with its host wall.
+
+    See INSERT_EPS. The wall-face rungs get PROUDER (applied joinery stands over
+    the wall's own), the floor datum gets vacated upwards (only the wall's
+    structural bottom belongs on it)."""
+    bm = mb.bm
+    bm.verts.index_update()
+    moved = 0
+    # ★ one `done` set per plane: adjacent coplanar faces (the welded shell and
+    # every plank run are full of them) share verts, and a vert nudged once per
+    # face it belongs to would travel two or three rungs instead of one
+    for p in (0.0, P1, P2, P3):
+        for sgn in (-1.0, 1.0):
+            val = sgn * (HT + p)
+            done = set()
+            for f in _plane_group(bm, 1, val, sgn):
+                for v in f.verts:
+                    if v.index in done:
+                        continue
+                    v.co[1] += sgn * INSERT_EPS
+                    done.add(v.index)
+                moved += 1
+    done = set()
+    for f in _plane_group(bm, 2, 0.0, -1.0):
+        for v in f.verts:
+            if v.index in done:
+                continue
+            v.co[2] += INSERT_EPS
+            done.add(v.index)
+        moved += 1
+    return moved
 
 
 def fix_tilted_uvs(ob):
@@ -361,7 +613,8 @@ def canonicalise(mb):
     mb.mats = [mb.mats[i] for i in order]
 
 
-def out(mb, coll, loc, bevel=BEVEL_W, segments=BEVEL_SEG, seam=None):
+def out(mb, coll, loc, bevel=BEVEL_W, segments=BEVEL_SEG, seam=None,
+        insert=False, defer_top=False):
     """Finish with LOCAL uvs (origin 0,0,0) then move the object into place --
     keeping the projection local is what makes instances tile in Unity.
 
@@ -369,6 +622,44 @@ def out(mb, coll, loc, bevel=BEVEL_W, segments=BEVEL_SEG, seam=None):
     just get an empty exclusion list). Leaving those on the modifier's default
     angle limit meant the inserts rounded at 40 degrees and the walls at 38, so
     a door frame and the wall around it carried subtly different edge radii."""
+    # ★ Every pass runs on the bmesh BEFORE finish(), so the recession is in the
+    # mesh by the time mark_bevel_weights() measures edges against the datums --
+    # which is the whole reason SEAM_BAND is a band. See DATUM_EPS.
+    # ★ ORDER MATTERS: the cross-object passes move whole planes bodily and can
+    # stack two members on the plane they land on (both door-frame architraves
+    # arrive on z = INSERT_EPS together), so deconflict() runs LAST and cleans up
+    # after them.
+    # ★★ NORMALS FIRST. sl() and extrude_poly() do not agree on winding -- half
+    # the faces on a corner's top datum come out of the builders pointing DOWN --
+    # and finish() only fixes that later, with recalc_face_normals(). A pass that
+    # reads f.normal before this line splits one plane into two opposed groups,
+    # recedes half of them the wrong way (UP, into the open) and leaves the other
+    # half sharing the datum. That is exactly what kept both corners flickering
+    # after the first three attempts. Idempotent with finish(), so the winding
+    # Unity finally imports is unchanged.
+    bmesh.ops.recalc_face_normals(mb.bm, faces=mb.bm.faces[:])
+    if insert:
+        lift_insert(mb)
+    if defer_top:
+        # ★ A Pillar is DROPPED ON a finished run: its block and the wall's beam
+        # cap both crown z = H, 0.42 m2 of it coplanar, and neither mesh can see
+        # the other to arbitrate. An applied column defers to the wall it dresses,
+        # so the Pillar leaves the top datum to the beam cap it lands beside.
+        # ★★ TWO rungs, not one. A wall's top datum is already occupied twice over
+        # -- the beam cap owns rung 0 and the shell behind it takes rung 1 -- and a
+        # Pillar's block is wider than both, so it overlaps both. Deferring by one
+        # rung just swaps which of them it flickers against (it landed exactly on
+        # the shell at H - 1 rung). Wall_Plain, the piece these are made to dress,
+        # carries no end block of its own, so rung 2 is free at the joint.
+        mb.bm.verts.index_update()
+        done = set()
+        for f in _plane_group(mb.bm, 2, H, 1.0):
+            for v in f.verts:
+                if v.index in done:
+                    continue
+                v.co[2] -= 2.0 * DATUM_EPS
+                done.add(v.index)
+    deconflict(mb)
     canonicalise(mb)
     ob = mb.finish(coll, origin=(0, 0, 0), bevel=bevel, uv_scale=1.0)
     ob.data.name = ob.name          # the mesh name is what Unity shows
@@ -1920,7 +2211,8 @@ def build():
         for i, (name, fn) in enumerate(items):
             mb = MB(name, PFX)
             fn(mb)
-            ob = out(mb, coll, (i * STEP, y, 0.0), seam=seam_for(name))
+            ob = out(mb, coll, (i * STEP, y, 0.0), seam=seam_for(name),
+                     insert=(row != "Walls"), defer_top=(name == "Pillar"))
             label(labs[row], name, (i * STEP, y - 2.7, 0.30), size=0.30)
         label(labs[row], row.upper(), (-STEP - 0.4, y - 2.7, 0.90), size=0.52)
 
@@ -2416,6 +2708,38 @@ hierarchy: **stone stands proud of the joinery it dies into, and the joinery
 stands proud of the field.** That is not decoration -- two members at the same
 projection put coplanar faces in the same place, and a `Pillar` dropped on a
 `Wall_Plain` run z-fights against the chair rail for exactly that reason.
+
+## Datum deconfliction
+
+The ladder keeps members apart on the wall FACE. It cannot help on the module
+datums -- `z = 0`, `z = H`, `x = +/-HW` -- because the whole meaning of a datum
+is that every member has to stop flush on it so modules butt on the lattice. So
+the shell's top face, the head beam's cap and the block over the post all landed
+on `z = H` together: coplanar, all facing +Z, three different materials, and the
+depth buffer choosing between them per pixel. Every wall in the kit carried
+1.20 m2 of that on its top, another 1.20 on its bottom and 0.24-1.78 on each end,
+and every insert clashed with its host wall on the floor datum and on the P2
+rung. Wall tops strobed stone/wood as the camera moved.
+
+`deconflict()` now runs on every piece: it sweeps each plane, fuses faces that
+share verts into one surface, and gives each plane ONE owner -- the largest
+surface -- with everything that genuinely overlaps it receding by 0.5 mm rungs,
+assigned by greedy colouring so nothing goes deeper than it must. The largest
+surface at `x = +/-HW` is always the structural shell, so **the butt joint and
+the snapping lattice stay bit-exact**; only applied trim ever moves, by a hairline
+no eye resolves. `lift_insert()` does the same across objects for the inserts,
+which cannot see their host wall: an insert stands a hairline PROUDER on the
+wall-face rungs (applied joinery reads as over the wall's own) and lifts off the
+floor datum. The kit measures zero coplanar exposed surfaces after this pass.
+
+Two traps if you touch it. The pass must run AFTER `recalc_face_normals()` --
+`sl()` and `extrude_poly()` disagree on winding, and reading `f.normal` before
+the recalc splits one plane into two opposed groups and recedes half of them
+upward, into the open. And `mark_bevel_weights()` excludes datum edges from
+chamfering by testing them against the datum, so that exclusion is a BAND
+(`SEAM_BAND`) wide enough to hold the recession ladder; leave it an exact plane
+and receded trim ends start taking the full 24 mm chamfer, which is the V-notch
+down every joint the exclusion exists to prevent.
 
 The bottom rung is 0.08 and not lower **because of the chamfer**. The Bevel
 modifier runs with `use_clamp_overlap`, and the clamp is **global per mesh**:
