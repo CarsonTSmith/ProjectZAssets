@@ -228,6 +228,16 @@ BASE_Z, BASE_P = COURSE, P2
 # width and the same projection rung (PIL_W / PIL_P below), so the two families
 # live on ONE lattice and butt without a step: an outside wall can turn into a
 # partition mid-run and the joint still reads as one deliberate column.
+# ★★ THE COLUMN LAPS THE MODULE DATUM, and this is not a nicety. Edges lying in
+# a module-boundary plane are excluded from the chamfer (see mark_bevel_weights)
+# because two butted modules must not each chamfer the meeting edge of a surface
+# that continues across it. A column is NOT such a surface -- nothing of it
+# continues into the next module -- so with its outer face flush on the datum the
+# arris came out razor sharp while its twin 0.68 m away was rounded: one side of
+# every pillar bevelled and the other not. Lapping it past the datum by more than
+# SEAM_BAND makes that a real edge again, and the 4 mm sits inside the neighbour's
+# wall thickness where it is swallowed by the column's own solid.
+POST_LAP = 0.004
 PAN_STILE = 0.09               # pilaster stile; an internal division gets two
 PAN_RAIL = 0.20                # rail over the plinth and under the capital
 PIL_CAP = 0.24                 # capital block, directly under the head beam
@@ -1773,7 +1783,9 @@ def int_dress(mb, hw, opens, posts=True):
     top_beam(mb, -hw, hw, ends=False)
     wainscot(mb, spans(hw, opens, 0.0, RAIL_Z))
     if posts:
-        pilaster(mb, -hw, -hw + 2.0 * PIL_W)
+        # lapped past the datum so BOTH arrises are chamfered -- see POST_LAP
+        x0 = -hw - POST_LAP
+        pilaster(mb, x0, x0 + 2.0 * PIL_W)
         # ★ The block is the COLUMN'S OWN width, not the masonry block's. Wider
         # (2 x BEAM_END) and 20 mm prouder, it overhung the shaft on one side
         # only -- both are anchored at the module datum -- and the top of every
@@ -1786,7 +1798,7 @@ def int_dress(mb, hw, opens, posts=True):
         # post. INSERT_EPS is wider than CLASH_GAP, so the two are simply
         # different planes and the column stays dark to the top of the wall.
         # Same rule the inserts live by: applied joinery stands over the wall's.
-        beam_block(mb, -hw, -hw + 2.0 * PIL_W, p=PIL_P + INSERT_EPS)
+        beam_block(mb, x0, x0 + 2.0 * PIL_W, p=PIL_P + INSERT_EPS)
 
 
 def int_shell(mb, hw, opens):
