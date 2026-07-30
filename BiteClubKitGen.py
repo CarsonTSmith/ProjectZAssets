@@ -1028,7 +1028,13 @@ def quoin_inner(mb, z0, z1, p=None, mat=None, lng=0.58, sht=0.44):
 
 
 def ground(mb, a0, a1, sgn, mat=None, axis="x"):
-    """The board GROUND: a continuous wood panel behind a plank run.
+    """The board GROUND: a continuous DARK wood panel behind a plank run.
+
+    ★ Dark on purpose (WOODD, the skirting's own timber). In the boards' own
+    colour the groove between two panels read as a crack in one flat surface,
+    because the only thing separating the boards was a chamfer; against the dark
+    ground each board reads as a raised panel with a shadowed gap beside it,
+    which is what makes a dado look like joinery rather than like cladding.
 
     ★ A plank run leaves PLANK_G between boards and the chamfer opens that to
     ~70 mm, and behind it was the wall -- so every groove in the wainscot showed
@@ -1040,7 +1046,7 @@ def ground(mb, a0, a1, sgn, mat=None, axis="x"):
     would be under BEVEL_MIN and would clamp the chamfer of the whole piece. It
     laps GROUND_LAP into the skirting and the chair rail at both ends so it never
     shares a plane with either."""
-    mat = M(WOOD) if mat is None else mat
+    mat = M(WOODD) if mat is None else mat
     y0, y1 = sgn * (HT + GROUND_P), sgn * (HT + GROUND_P - GROUND_T)
     z0, z1 = SKIRT_Z - GROUND_LAP, WAIN_Z + GROUND_LAP
     if axis == "x":
@@ -1098,7 +1104,7 @@ def corner_wainscot(mb, sgn=-1.0):
     mat, dark = M(WOOD), M(WOODD)
     corner_band(mb, SKIRT_P, 0.0, SKIRT_Z, dark, sgn)
     corner_band(mb, RAIL_P, WAIN_Z, RAIL_Z, mat, sgn)
-    corner_band(mb, GROUND_P, SKIRT_Z - GROUND_LAP, WAIN_Z + GROUND_LAP, mat,
+    corner_band(mb, GROUND_P, SKIRT_Z - GROUND_LAP, WAIN_Z + GROUND_LAP, dark,
                 sgn, inset=GROUND_T - GROUND_P)
     q0, q1 = sgn * HT, sgn * (HT + WAIN_P)
     lo, hi = min(q0, q1), max(q0, q1)
@@ -1112,17 +1118,23 @@ def corner_wainscot(mb, sgn=-1.0):
         plank_run(mb, lo, hi, HT + WAIN_P, CWING, SKIRT_Z, WAIN_Z, mat, axis="y")
 
 
-def beam_block(mb, x0, x1, mat=None):
+def beam_block(mb, x0, x1, mat=None, p=None):
     """The heavy dark block that caps a post where it meets the head beam.
 
     Factored out so Wall_Straight's ends, the corner and the free-standing
     Pillar all emit the IDENTICAL block -- a pillar dropped into a Wall_Plain
     run has to be indistinguishable from the doubled post at a Wall_Straight
-    joint, and that only holds if there is one definition of it."""
+    joint, and that only holds if there is one definition of it.
+
+    ★ `p` is the projection, because the interior family wants the block FLUSH
+    with the column under it (PIL_P) rather than the extra 20 mm the masonry
+    blocks stand proud. A block wider or prouder than its own post turns the top
+    of the column into a step -- see `int_dress`."""
+    p = BEAM_CAP_P + 0.02 if p is None else p
     # starts exactly AT the beam datum, so it sits on the post rather than
     # cutting 100 mm into its top course
-    sl(mb, x0, x1, -HT - BEAM_CAP_P - 0.02, HT + BEAM_CAP_P + 0.02,
-       BEAM_Z, H, M(WOODD) if mat is None else mat)
+    sl(mb, x0, x1, -HT - p, HT + p, BEAM_Z, H,
+       M(WOODD) if mat is None else mat)
 
 
 def top_beam(mb, x0, x1, mat=None, ends=True):
@@ -1146,7 +1158,7 @@ def wainscot(mb, segs, mat=None, dark=None):
         for sgn in (-1.0, 1.0):
             ya = sgn * HT
             yb = sgn * (HT + WAIN_P)
-            ground(mb, x0, x1, sgn, mat)
+            ground(mb, x0, x1, sgn, dark)
             plank_run(mb, x0, x1, min(ya, yb), max(ya, yb), SKIRT_Z, WAIN_Z, mat)
         sl(mb, x0, x1, -HT - RAIL_P, HT + RAIL_P, WAIN_Z, RAIL_Z, mat)
 
@@ -1460,16 +1472,20 @@ def corner_solid(mb, p, z0, z1, mat):
           z0, z1, mat)
 
 
-def _corner_beam(mb):
+def _corner_beam(mb, block=True):
     """Head beam mitred round both wings, with the standard block over the
-    corner -- the same `beam_block` section a post gets."""
+    corner -- the same `beam_block` section a post gets.
+
+    `block=False` for the interior corners, where the post carries its own L
+    head through the beam instead (see `corner_post`)."""
     wood = M(WOOD)
     corner_solid(mb, BEAM_P, BEAM_Z, BEAM_CAP_Z, wood)
     corner_solid(mb, BEAM_CAP_P, BEAM_CAP_Z, H, wood)
-    # symmetric about the corner, so it caps a quoin on either side and matches
-    # the 0.70 m section of a straight wall's end block
-    o = HT + BEAM_CAP_P + 0.02
-    sl(mb, -o, o, -o, o, BEAM_Z, H, M(WOODD))
+    if block:
+        # symmetric about the corner, so it caps a quoin on either side and
+        # matches the 0.70 m section of a straight wall's end block
+        o = HT + BEAM_CAP_P + 0.02
+        sl(mb, -o, o, -o, o, BEAM_Z, H, M(WOODD))
 
 
 def w_corner(mb):
@@ -1649,18 +1665,26 @@ def pilaster(mb, x0, x1):
         sl(mb, a, b, -HT - P2, HT + P2, z0 + PAN_RAIL, z1 - PAN_RAIL, wood)
 
 
-def corner_post(mb, sgn=-1.0, arm=PIL_ARM, p=None):
+def corner_post(mb, sgn=-1.0, arm=PIL_ARM, p=None, head=True):
     """The pilaster turning a corner -- ONE L-solid per member, never two butted
-    arms (see `lpoly`), in the same three sections a straight pilaster uses so a
-    corner and the wall beside it read as one run of joinery.
+    arms (see `lpoly`), in the same sections a straight pilaster uses so a corner
+    and the wall beside it read as one run of joinery.
 
     `sgn` < 0 wraps the convex corner at (-HT,-HT), > 0 the reflex corner at
-    (+HT,+HT), exactly as `quoin_corner` / `quoin_inner` do."""
+    (+HT,+HT), exactly as `quoin_corner` / `quoin_inner` do.
+
+    ★ `head` carries the post's own L straight through the head beam to the top
+    of the wall, in place of the square block `_corner_beam` drops on the masonry
+    corners. A square block on an L post is the same mismatch a 0.88 m block on a
+    0.68 m column was: the top stops lining up with the body it sits on."""
     p = PIL_P if p is None else p
     wood, dark = M(WOOD), M(WOODD)
-    for z0, z1, m in ((0.0, RAIL_Z, dark),
-                      (RAIL_Z, BEAM_Z - PIL_CAP, wood),
-                      (BEAM_Z - PIL_CAP, BEAM_Z, dark)):
+    tiers = [(0.0, RAIL_Z, dark),
+             (RAIL_Z, BEAM_Z - PIL_CAP, wood),
+             (BEAM_Z - PIL_CAP, BEAM_Z, dark)]
+    if head:
+        tiers.append((BEAM_Z, H, dark))
+    for z0, z1, m in tiers:
         if sgn < 0:
             o, i_ = -HT - p, -HT
             pts = [(o, o), (i_ + arm, o), (i_ + arm, i_), (i_, i_),
@@ -1748,7 +1772,11 @@ def int_dress(mb, hw, opens, posts=True):
     wainscot(mb, spans(hw, opens, 0.0, RAIL_Z))
     if posts:
         pilaster(mb, -hw, -hw + 2.0 * PIL_W)
-        beam_block(mb, -hw, -hw + 2.0 * BEAM_END)
+        # ★ The block is the COLUMN'S OWN width and projection, not the masonry
+        # block's. Wider (2 x BEAM_END) and 20 mm prouder, it overhung the shaft
+        # on one side only -- both are anchored at the module datum -- and the
+        # top of every column came out as an L instead of a square head.
+        beam_block(mb, -hw, -hw + 2.0 * PIL_W, p=PIL_P)
 
 
 def int_shell(mb, hw, opens):
@@ -1792,7 +1820,7 @@ def wi_pilaster(mb):
     butt the way a Straight module's own column does. Interchangeable with
     `Pillar` on the same joint if you want one stone column in a papered room."""
     pilaster(mb, -PIL_W, PIL_W)
-    beam_block(mb, -BEAM_END, BEAM_END)     # = two module-end blocks butted
+    beam_block(mb, -PIL_W, PIL_W, p=PIL_P)  # square on the shaft, as int_dress
 
 
 def wi_corner(mb):
@@ -1802,7 +1830,7 @@ def wi_corner(mb):
     _corner_core(mb, outer_is_a=True, m_e=M(WOOD))
     corner_wainscot(mb, -1.0)
     corner_wainscot(mb, 1.0)
-    _corner_beam(mb)
+    _corner_beam(mb, block=False)
     corner_post(mb, -1.0)
 
 
@@ -1812,7 +1840,7 @@ def wi_corner_inside(mb):
     _corner_core(mb, outer_is_a=False, m_e=M(WOOD))
     corner_wainscot(mb, -1.0)
     corner_wainscot(mb, 1.0)
-    _corner_beam(mb)
+    _corner_beam(mb, block=False)
     corner_post(mb, 1.0)
 
 
