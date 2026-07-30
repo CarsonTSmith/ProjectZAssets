@@ -14,6 +14,15 @@ catalogue and two demo rooms:
                                    wood pilaster where the outside wall has its
                                    quoin post. Same lattice, same pivots, same
                                    inserts, so the two families mix in one run.
+    BC_Walls_Dec 14 copies       -- the interior set again, with the two wall
+                                   slots repapered from the user's BlenderKit
+                                   BOOKMARKS (appended out of the local cache,
+                                   so the build stays offline). Geometry is a
+                                   straight copy, so these butt an ordinary
+                                   interior wall with nothing to reconcile.
+    BC_Papers    one wall per bookmarked paper -- a swatch row, so a wallpaper
+                                   can be judged on a wall instead of on a
+                                   sphere in a search panel.
     BC_Doors     11 door pieces   (door, double door, arch door, secret
                                    bookcase, barricaded door, trapdoor -- each
                                    frame plus its own hinged leaf mesh)
@@ -2491,6 +2500,108 @@ WINDOWS = [("Window_Small", n_small), ("Window_Tall", n_tall),
            ("Secret_Grate", n_grate), ("Window_Round_Int", n_round_int)]
 
 
+# -------------------------------------------------- decorative wallpapers ---
+# The user's own BlenderKit BOOKMARKS (asset_type:material + bookmarks_rating:1),
+# every one of them a wallpaper, resolved against the LOCAL BlenderKit download
+# cache. Reading the cache rather than the API keeps the build offline,
+# deterministic and free of the account's rate limits, and picks up whatever
+# resolution was downloaded in the addon. All royalty-free.
+# ★ Slugs match the FIRST underscore field of the cached file name
+# (`<slug>_<res>_<uuid>.blend`) EXACTLY, never as a prefix: "70s-decorative-
+# wallpaper" is a prefix of six of its own colourways and would swallow them.
+BK_CACHE = os.path.expanduser("~/blenderkit_data/materials")
+BK_PAPERS = [
+    ("70s-decorative-wallpaper-magenta", "Paper_70s_Magenta"),
+    ("70s-decorative-wallpaper-psychedelic", "Paper_70s_Psychedelic"),
+    ("70s-decorative-wallpaper-carmine", "Paper_70s_Carmine"),
+    ("70s-decorative-wallpaper-steelblue", "Paper_70s_SteelBlue"),
+    ("70s-decorative-wallpaper-amber", "Paper_70s_Amber"),
+    ("70s-decorative-wallpaper-limegreen", "Paper_70s_LimeGreen"),
+    ("70s-decorative-wallpaper", "Paper_70s"),
+    ("floral-wallpaper-10", "Paper_Floral"),
+    ("geometric-wallpaper", "Paper_Geometric"),
+    ("hexa-wallpaper", "Paper_Hexa"),
+    ("red-and-black-wallpaper", "Paper_RedBlack"),
+    ("matchstick-grasscloth-wallpaper", "Paper_Grasscloth"),
+    ("wallpaper", "Paper_Plain"),
+]
+
+
+def bk_material(slug, name):
+    """Append ONE bookmarked BlenderKit material under a kit name.
+
+    ★ Appends only once: `build()` runs on every execution of this script, and a
+    second append would arrive as `.001` and quietly leave the pieces pointing at
+    the stale copy. Fake user set, so a purge cannot drop a paper nothing happens
+    to be assigned to."""
+    key = PFX + name
+    have = bpy.data.materials.get(key)
+    if have is not None:
+        return have
+    path = None
+    for d in sorted(os.listdir(BK_CACHE)):
+        p = os.path.join(BK_CACHE, d)
+        if not os.path.isdir(p):
+            continue
+        for f in sorted(os.listdir(p)):
+            if f.endswith(".blend") and f.split("_")[0] == slug:
+                path = os.path.join(p, f)
+                break
+        if path:
+            break
+    if path is None:
+        print("   !! bookmarked paper not in the BlenderKit cache:", slug)
+        return None
+    before = set(bpy.data.materials)
+    with bpy.data.libraries.load(path, link=False) as (src, dst):
+        dst.materials = list(src.materials)[:1]
+    new = [m for m in bpy.data.materials if m not in before]
+    if not new:
+        return None
+    m = new[0]
+    m.name = key
+    m.use_fake_user = True
+    # ★★ MAKE IT TILE ON WHOLE METRES. The kit projects wall paper at 0.5 rep/m
+    # over whole-metre modules precisely so a pattern crosses a butt joint
+    # unbroken -- and that guarantee only survives if the material's OWN mapping
+    # is an integer multiple of it. These come in at 4 and 8, which is why they
+    # line up; anything that does not is rounded here rather than left to break
+    # the pattern at every 4 m joint in the room.
+    for n in m.node_tree.nodes:
+        if n.type == "MAPPING":
+            s = n.inputs["Scale"].default_value
+            for i in range(3):
+                s[i] = max(1.0, float(round(s[i])))
+    return m
+
+
+def bk_papers():
+    """Every bookmarked wallpaper, in list order; missing ones simply drop out."""
+    return [m for m in (bk_material(s, n) for s, n in BK_PAPERS) if m]
+
+
+def paper_copy(src, name, coll, loc, pa, pb):
+    """A piece copied with its wall slots repapered.
+
+    The geometry is untouched -- same mesh, same UVs, same chamfer -- so a
+    decorative wall butts an ordinary one on the lattice with nothing to
+    reconcile. Only slots 0 and 1 change, which on this family are the two ROOMS
+    the partition divides, so a copy can carry a different paper per side."""
+    ob = src.copy()
+    ob.data = src.data.copy()
+    ob.name = ob.data.name = PFX + name
+    for i, m in enumerate(ob.data.materials):
+        if m is None:
+            continue
+        if m.name == PAPER and pa is not None:
+            ob.data.materials[i] = pa
+        elif m.name == PAPER_B and pb is not None:
+            ob.data.materials[i] = pb
+    ob.location = Vector(loc)
+    coll.objects.link(ob)
+    return ob
+
+
 # ------------------------------------------------------------- materials ---
 def _nt(m):
     m.use_nodes = True
@@ -2739,8 +2850,10 @@ def seam_for(name):
 # datum (see `defer_top` in out()) instead of fighting the beam cap for it.
 POSTS = ("Pillar", "Pilaster")
 
-ROW_Y = {"Walls": 0.0, "WallsInt": -13.0, "Doors": 13.0, "Windows": 24.0}
+ROW_Y = {"Walls": 0.0, "WallsInt": -13.0, "WallsDec": -26.0,
+         "Papers": -39.0, "Doors": 13.0, "Windows": 24.0}
 ROW_TITLE = {"Walls": "WALLS", "WallsInt": "INTERIOR WALLS",
+             "WallsDec": "DECORATED INTERIOR", "Papers": "BOOKMARKED PAPERS",
              "Doors": "DOORS", "Windows": "WINDOWS"}
 STEP = 5.4
 
@@ -2794,6 +2907,8 @@ def build():
     root = BK.ensure_coll(ROOT, scene.collection)
     c_w = BK.ensure_coll(PFX + "Walls", root)
     c_i = BK.ensure_coll(PFX + "Walls_Int", root)
+    c_dc = BK.ensure_coll(PFX + "Walls_Dec", root)
+    c_pp = BK.ensure_coll(PFX + "Papers", root)
     c_d = BK.ensure_coll(PFX + "Doors", root)
     c_n = BK.ensure_coll(PFX + "Windows", root)
     c_x = BK.ensure_coll(PFX + "Demo", root)
@@ -2801,7 +2916,8 @@ def build():
     c_l = BK.ensure_coll(PFX + "Preview", root)
     c_g = BK.ensure_coll(PFX + "Lighting", root)
     labs = {r: BK.ensure_coll(PFX + "Lab_" + r, c_l)
-            for r in ("Walls", "WallsInt", "Doors", "Windows", "Fitted")}
+            for r in ("Walls", "WallsInt", "WallsDec", "Papers",
+                      "Doors", "Windows", "Fitted")}
     c_s = BK.ensure_coll(PFX + "Stage", c_l)
 
     ground_plane(c_s, "Stage", 26.0, 4.0, 120.0, 96.0)
@@ -2833,6 +2949,30 @@ def build():
               (p[0], p[1] - 2.7, 0.30), size=0.26)
     label(labs["Fitted"], "FITTED", (-STEP - 0.4, ROW_Y["Windows"] + 6.3, 0.90),
           size=0.52)
+
+    # ---- decorated copies of the interior set, papered from the bookmarks --
+    papers = bk_papers()
+    if papers:
+        pa, pb = papers[0], papers[1 % len(papers)]
+        y = ROW_Y["WallsDec"]
+        for i, (name, _) in enumerate(WALLS_INT):
+            nm = (name.replace("Wall_Int_", "Wall_Dec_")
+                  if name.startswith("Wall_Int_") else name + "_Dec")
+            paper_copy(K[PFX + name], nm, c_dc, (i * STEP, y, 0.0), pa, pb)
+            label(labs["WallsDec"], nm, (i * STEP, y - 2.7, 0.30), size=0.30)
+        label(labs["WallsDec"], ROW_TITLE["WallsDec"],
+              (-STEP - 0.4, y - 2.7, 0.90), size=0.52)
+        # ...and one wall per bookmark, so every paper can be judged on a wall
+        # rather than on a sphere in a search panel
+        y = ROW_Y["Papers"]
+        for i, m in enumerate(papers):
+            nm = m.name.replace(PFX, "") + "_Swatch"
+            paper_copy(K[PFX + "Wall_Int_Straight"], nm, c_pp,
+                       (i * STEP, y, 0.0), m, m)
+            label(labs["Papers"], m.name.replace(PFX + "Paper_", ""),
+                  (i * STEP, y - 2.7, 0.30), size=0.30)
+        label(labs["Papers"], ROW_TITLE["Papers"],
+              (-STEP - 0.4, y - 2.7, 0.90), size=0.52)
 
     demo_room(c_x, (6.0, DEMO_Y))
     int_rooms(c_x, (0.0, DEMO_Y - 30.0))
@@ -3214,7 +3354,7 @@ SHOTS = {
     # pulled back when the interior row was added -- the plate is only useful if
     # it holds ALL of the rows, and a fourth one shifts the whole layout toward
     # the lens
-    "overview":   ((84.0, -82.0, 64.0), (34.0, 5.0, 0.0), 40),
+    "overview":   ((100.0, -104.0, 76.0), (36.0, -12.0, 0.0), 40),
     "demo_hero":  ((DX - 19.0, DY - 22.0, 9.5), (DX, DY, 1.6), 34),
     "demo_close": ((DX - 5.0, DY - 13.0, 2.4), (DX - 2.0, DY - 4.0, 1.8), 34),
     "demo_in":    ((DX - 3.0, DY - 2.6, 1.70), (DX + 3.5, DY + 2.0, 1.90), 20),
@@ -3264,6 +3404,8 @@ SHOTS["doors_trap"] = ((_tx, ROW_Y["Doors"] - 8.6, 8.0),
                        (_tx, ROW_Y["Doors"], 0.0), 40)
 SHOTS.update(_row_shots("walls", ROW_Y["Walls"], len(WALLS)))
 SHOTS.update(_row_shots("wallsint", ROW_Y["WallsInt"], len(WALLS_INT)))
+SHOTS.update(_row_shots("wallsdec", ROW_Y["WallsDec"], len(WALLS_INT)))
+SHOTS.update(_row_shots("papers", ROW_Y["Papers"], len(BK_PAPERS)))
 SHOTS.update(_row_shots("doors", ROW_Y["Doors"], len(DOORS), dist=17.0, lens=38.0,
                         z=1.75, tz=1.55))
 SHOTS.update(_row_shots("windows", ROW_Y["Windows"], len(WINDOWS), dist=15.0,
@@ -3281,13 +3423,17 @@ def aim(cam, loc, tgt, lens):
 # catalogue stays compact to work in, which means a row camera stands level with
 # -- or inside -- its neighbours. Isolating the row is cheaper than spreading the
 # layout over 100 m, and gives clean sheet-style plates either way.
-ISO = [PFX + "Walls", PFX + "Walls_Int", PFX + "Doors", PFX + "Windows",
+ISO = [PFX + "Walls", PFX + "Walls_Int", PFX + "Walls_Dec", PFX + "Papers",
+       PFX + "Lab_WallsDec", PFX + "Lab_Papers",
+       PFX + "Doors", PFX + "Windows",
        PFX + "Fitted", PFX + "Demo", PFX + "Stage", PFX + "Lab_Walls",
        PFX + "Lab_WallsInt", PFX + "Lab_Doors",
        PFX + "Lab_Windows", PFX + "Lab_Fitted"]
 _ST = PFX + "Stage"
 ROW_COLL = {"walls": [PFX + "Walls", PFX + "Lab_Walls", _ST],
             "wallsint": [PFX + "Walls_Int", PFX + "Lab_WallsInt", _ST],
+            "wallsdec": [PFX + "Walls_Dec", PFX + "Lab_WallsDec", _ST],
+            "papers": [PFX + "Papers", PFX + "Lab_Papers", _ST],
             "doors": [PFX + "Doors", PFX + "Lab_Doors", _ST],
             "windows": [PFX + "Windows", PFX + "Lab_Windows", _ST],
             "fitted": [PFX + "Fitted", PFX + "Lab_Fitted", _ST],
@@ -3654,6 +3800,26 @@ end is bare -- flip the module, or cap it with a free-standing `Pilaster`.
 `Wall_Int_Plain` + `Pilaster` puts one centred ON the joint. Both give a 0.68 m
 column at every joint and both hide the butt; they differ only by 0.34 m in where
 the column lands, so pick one per run rather than mixing them in the same wall.
+
+### Decorated copies -- `Wall_Dec_*` and the paper library
+
+`BC_Walls_Dec` is the same fourteen pieces again with the two wall slots
+repapered from your BlenderKit **bookmarks**, appended out of the local
+BlenderKit cache so a rebuild needs no network and no account. Slot 0 and slot 1
+are the two rooms, so the copy carries a different paper per side. Every
+bookmarked paper is also in the file as `BC_Paper_*` with a fake user, and
+`BC_Papers` shows one wall per paper -- change a piece's slot to any of them in
+one click.
+
+The geometry is a straight copy: same mesh, same UVs, same chamfer, so a
+decorated wall butts an ordinary interior one on the lattice with nothing to
+reconcile. **They are deliberately NOT exported to FBX** -- the mesh is identical
+to `Wall_Int_*`, and FBX carries no procedural material anyway, so the useful
+Unity workflow is the interior FBX with your own URP material on slot 0/1.
+
+Each paper's own mapping is rounded to an integer multiple on import, because the
+kit's 0.5 repeats/m projection over whole-metre modules is what carries a pattern
+across a butt joint unbroken -- a fractional scale would break it at every 4 m.
 
 **Cap the far end of a run.** N modules carry N columns and make N+1 joints, so
 whichever end you finish on has a bare joint -- drop a free-standing `Pilaster`
