@@ -1679,18 +1679,20 @@ def corner_post(mb, sgn=-1.0, arm=PIL_ARM, p=None, head=True):
     0.68 m column was: the top stops lining up with the body it sits on."""
     p = PIL_P if p is None else p
     wood, dark = M(WOOD), M(WOODD)
-    tiers = [(0.0, RAIL_Z, dark),
-             (RAIL_Z, BEAM_Z - PIL_CAP, wood),
-             (BEAM_Z - PIL_CAP, BEAM_Z, dark)]
+    tiers = [(0.0, RAIL_Z, dark, p),
+             (RAIL_Z, BEAM_Z - PIL_CAP, wood, p),
+             (BEAM_Z - PIL_CAP, BEAM_Z, dark, p)]
     if head:
-        tiers.append((BEAM_Z, H, dark))
-    for z0, z1, m in tiers:
+        # one hairline proud, or the corner's own beam cap owns the plane and
+        # renders in front of the head -- see the note in int_dress
+        tiers.append((BEAM_Z, H, dark, p + INSERT_EPS))
+    for z0, z1, m, pp in tiers:
         if sgn < 0:
-            o, i_ = -HT - p, -HT
+            o, i_ = -HT - pp, -HT
             pts = [(o, o), (i_ + arm, o), (i_ + arm, i_), (i_, i_),
                    (i_, i_ + arm), (o, i_ + arm)]
         else:
-            o, i_ = HT + p, HT
+            o, i_ = HT + pp, HT
             pts = [(i_, i_), (i_ + arm, i_), (i_ + arm, o), (o, o),
                    (o, i_ + arm), (i_, i_ + arm)]
         lpoly(mb, pts, z0, z1, m)
@@ -1772,11 +1774,19 @@ def int_dress(mb, hw, opens, posts=True):
     wainscot(mb, spans(hw, opens, 0.0, RAIL_Z))
     if posts:
         pilaster(mb, -hw, -hw + 2.0 * PIL_W)
-        # ★ The block is the COLUMN'S OWN width and projection, not the masonry
-        # block's. Wider (2 x BEAM_END) and 20 mm prouder, it overhung the shaft
-        # on one side only -- both are anchored at the module datum -- and the
-        # top of every column came out as an L instead of a square head.
-        beam_block(mb, -hw, -hw + 2.0 * PIL_W, p=PIL_P)
+        # ★ The block is the COLUMN'S OWN width, not the masonry block's. Wider
+        # (2 x BEAM_END) and 20 mm prouder, it overhung the shaft on one side
+        # only -- both are anchored at the module datum -- and the top of every
+        # column came out as an L instead of a square head.
+        # ★★ Its projection is the shaft's plus ONE hairline, and that hairline
+        # is load-bearing: authored dead flush, the head and the head beam's cap
+        # share a plane, `deconflict()` hands it to the cap (much the larger
+        # surface) and the block recedes half a millimetre BEHIND it -- so the
+        # top 160 mm of every column rendered as light beam instead of dark
+        # post. INSERT_EPS is wider than CLASH_GAP, so the two are simply
+        # different planes and the column stays dark to the top of the wall.
+        # Same rule the inserts live by: applied joinery stands over the wall's.
+        beam_block(mb, -hw, -hw + 2.0 * PIL_W, p=PIL_P + INSERT_EPS)
 
 
 def int_shell(mb, hw, opens):
@@ -1820,7 +1830,10 @@ def wi_pilaster(mb):
     butt the way a Straight module's own column does. Interchangeable with
     `Pillar` on the same joint if you want one stone column in a papered room."""
     pilaster(mb, -PIL_W, PIL_W)
-    beam_block(mb, -PIL_W, PIL_W, p=PIL_P)  # square on the shaft, as int_dress
+    # square on the shaft and one hairline proud, exactly as int_dress -- here it
+    # also has to beat the cap of the wall this column is DROPPED ON, which is a
+    # different mesh and so beyond anything deconflict() can arbitrate
+    beam_block(mb, -PIL_W, PIL_W, p=PIL_P + INSERT_EPS)
 
 
 def wi_corner(mb):
