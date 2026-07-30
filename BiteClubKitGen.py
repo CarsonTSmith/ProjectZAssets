@@ -1164,11 +1164,26 @@ def beam_block(mb, x0, x1, mat=None, p=None, z0=BEAM_Z):
        M(WOODD) if mat is None else mat)
 
 
-def top_beam(mb, x0, x1, mat=None, ends=True):
-    """Wood head beam plus its cap, with a heavier block over each post."""
+def top_beam(mb, x0, x1, mat=None, ends=True, one_tier=False):
+    """Wood head beam plus its cap, with a heavier block over each post.
+
+    ★★★ `one_tier` drops the P3 cap, and the interior family needs it. A HAIRLINE
+    CANNOT SURVIVE A CHAMFER: the cap ran the full module width at P3, the dark
+    head block stood over it at P3 + INSERT_EPS, and 1.5 mm of relief is nothing
+    against a 24 mm bevel -- the block's chamfer facet dives from 0.3315 to
+    0.3075 and the cap at 0.3300 surfaces straight through it, so the light beam
+    appeared as a wedge in the upper corners of every dark column. Adding relief
+    instead would mean a 26 mm step where the head meets the shaft, which is the
+    L this family already got rid of. Take the tier away and the head has the
+    whole P3 - P2 = 50 mm to itself: flush with the shaft, nothing behind it, and
+    the same answer for a free-standing Pilaster dropped on a Wall_Int_Plain,
+    whose cap no wall-side trick could ever have reached."""
     mat = M(WOOD) if mat is None else mat
-    sl(mb, x0, x1, -HT - BEAM_P, HT + BEAM_P, BEAM_Z, BEAM_CAP_Z, mat)
-    sl(mb, x0, x1, -HT - BEAM_CAP_P, HT + BEAM_CAP_P, BEAM_CAP_Z, H, mat)
+    if one_tier:
+        sl(mb, x0, x1, -HT - BEAM_P, HT + BEAM_P, BEAM_Z, H, mat)
+    else:
+        sl(mb, x0, x1, -HT - BEAM_P, HT + BEAM_P, BEAM_Z, BEAM_CAP_Z, mat)
+        sl(mb, x0, x1, -HT - BEAM_CAP_P, HT + BEAM_CAP_P, BEAM_CAP_Z, H, mat)
     if ends:
         for xs in (x0, x1 - BEAM_END):
             beam_block(mb, xs, xs + BEAM_END)
@@ -1501,15 +1516,18 @@ def corner_solid(mb, p, z0, z1, mat):
           z0, z1, mat)
 
 
-def _corner_beam(mb, block=True):
+def _corner_beam(mb, block=True, one_tier=False):
     """Head beam mitred round both wings, with the standard block over the
     corner -- the same `beam_block` section a post gets.
 
     `block=False` for the interior corners, where the post carries its own L
     head through the beam instead (see `corner_post`)."""
     wood = M(WOOD)
-    corner_solid(mb, BEAM_P, BEAM_Z, BEAM_CAP_Z, wood)
-    corner_solid(mb, BEAM_CAP_P, BEAM_CAP_Z, H, wood)
+    if one_tier:                 # see top_beam: no cap for the head to fight
+        corner_solid(mb, BEAM_P, BEAM_Z, H, wood)
+    else:
+        corner_solid(mb, BEAM_P, BEAM_Z, BEAM_CAP_Z, wood)
+        corner_solid(mb, BEAM_CAP_P, BEAM_CAP_Z, H, wood)
     if block:
         # symmetric about the corner, so it caps a quoin on either side and
         # matches the 0.70 m section of a straight wall's end block
@@ -1712,9 +1730,9 @@ def corner_post(mb, sgn=-1.0, arm=PIL_ARM, p=None, head=True):
              (RAIL_Z, BEAM_Z - PIL_CAP, wood, p),
              (BEAM_Z - PIL_CAP, BEAM_Z, dark, p)]
     if head:
-        # one hairline proud, or the corner's own beam cap owns the plane and
-        # renders in front of the head -- see the note in int_dress
-        tiers.append((BEAM_Z, H, dark, p + INSERT_EPS))
+        # flush: the interior corner's beam is one tier at P2, so the head has
+        # the full P3 - P2 to itself and nothing runs behind it (see top_beam)
+        tiers.append((BEAM_Z, H, dark, p))
     for z0, z1, m, pp in tiers:
         if sgn < 0:
             o, i_ = -HT - pp, -HT
@@ -1799,7 +1817,7 @@ def int_dress(mb, hw, opens, posts=True):
     around -- dressing both ends is what put a seam down the middle of every
     column, and having the corner piece dress a wing end only moves the problem,
     since which wing is the bare one depends on the plan's handedness."""
-    top_beam(mb, -hw, hw, ends=False)
+    top_beam(mb, -hw, hw, ends=False, one_tier=True)
     wainscot(mb, spans(hw, opens, 0.0, RAIL_Z))
     if posts:
         # lapped past the datum so BOTH arrises are chamfered -- see POST_LAP
@@ -1817,7 +1835,7 @@ def int_dress(mb, hw, opens, posts=True):
         # post. INSERT_EPS is wider than CLASH_GAP, so the two are simply
         # different planes and the column stays dark to the top of the wall.
         # Same rule the inserts live by: applied joinery stands over the wall's.
-        beam_block(mb, x0, x0 + 2.0 * PIL_W, p=PIL_P + INSERT_EPS)
+        beam_block(mb, x0, x0 + 2.0 * PIL_W, p=PIL_P)
 
 
 def int_shell(mb, hw, opens):
@@ -1868,7 +1886,7 @@ def wi_pilaster(mb):
     # square on the shaft and one hairline proud, exactly as int_dress -- here it
     # also has to beat the cap of the wall this column is DROPPED ON, which is a
     # different mesh and so beyond anything deconflict() can arbitrate
-    beam_block(mb, -PIL_W, PIL_W, p=PIL_P + INSERT_EPS, z0=BEAM_Z - INSERT_EPS)
+    beam_block(mb, -PIL_W, PIL_W, p=PIL_P, z0=BEAM_Z - INSERT_EPS)
 
 
 def wi_corner(mb):
@@ -1878,7 +1896,7 @@ def wi_corner(mb):
     _corner_core(mb, outer_is_a=True, m_e=M(WOOD))
     corner_wainscot(mb, -1.0)
     corner_wainscot(mb, 1.0)
-    _corner_beam(mb, block=False)
+    _corner_beam(mb, block=False, one_tier=True)
     corner_post(mb, -1.0)
 
 
@@ -1888,7 +1906,7 @@ def wi_corner_inside(mb):
     _corner_core(mb, outer_is_a=False, m_e=M(WOOD))
     corner_wainscot(mb, -1.0)
     corner_wainscot(mb, 1.0)
-    _corner_beam(mb, block=False)
+    _corner_beam(mb, block=False, one_tier=True)
     corner_post(mb, 1.0)
 
 
