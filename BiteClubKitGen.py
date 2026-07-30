@@ -3657,6 +3657,140 @@ def export_fbx(out_dir):
     return written
 
 
+def _tex_role(mat):
+    """Classify a material's images by the BSDF input they feed.
+
+    ★ Group-aware. Two of the papers route their maps through a node group, and a
+    walk that only follows the top-level tree finds nothing at all for them --
+    they came back with an empty map set, which reads as "procedural, nothing to
+    export" and would have shipped a flat colour to Unity. So the walk descends
+    into groups, and anything still unclassified is matched on the image NAME as
+    a last resort."""
+    out = {}
+    if not mat.use_nodes:
+        return out
+    bsdf = next((n for n in mat.node_tree.nodes
+                 if n.type == "BSDF_PRINCIPLED"), None)
+
+    def find(sock, depth=0):
+        if sock is None or not sock.is_linked or depth > 10:
+            return None
+        n = sock.links[0].from_node
+        if n.type == "TEX_IMAGE":
+            return n.image
+        if n.type == "GROUP" and n.node_tree:
+            for gn in n.node_tree.nodes:      # inside the group
+                if gn.type == "TEX_IMAGE" and gn.image:
+                    return gn.image
+        for i in n.inputs:
+            got = find(i, depth + 1)
+            if got:
+                return got
+        return None
+
+    for key, role in (("Base Color", "albedo"), ("Roughness", "rough"),
+                      ("Normal", "normal")):
+        img = find(bsdf.inputs.get(key)) if bsdf else None
+        if img:
+            out[role] = img
+    if "albedo" not in out:                   # last resort: match on name
+        for n in mat.node_tree.nodes:
+            if n.type != "TEX_IMAGE" or not n.image:
+                continue
+            low = n.image.name.lower()
+            role = ("normal" if "normal" in low or "_nrm" in low
+                    else "rough" if "rough" in low
+                    else "albedo")
+            out.setdefault(role, n.image)
+    return out
+
+
+def _map_scale(mat):
+    """The material's own texture scale -- Unity's tiling has to match it.
+
+    The FBX carries the kit's UV projection (0.5 repeats/m on paper, 1.0 on
+    timber) and NOTHING else; the Blender-side Mapping node is what turns that
+    into the pattern size you actually see. Ship it in the manifest and Unity
+    reproduces the Blender look instead of a wallpaper tiled once per 2 m."""
+    for n in (mat.node_tree.nodes if mat.use_nodes else []):
+        if n.type == "MAPPING":
+            return round(float(n.inputs["Scale"].default_value[0]), 4)
+    return 1.0
+
+
+def export_unity(out_dir):
+    """Textures + a manifest for the Unity side of the kit.
+
+    ★ The packed bytes are copied out verbatim rather than re-encoded: these are
+    already JPEG in the asset, and a round trip through Blender's saver would
+    re-compress every one of them for nothing.
+
+    The manifest is what `BiteClubKitTool` reads to build URP materials, so the
+    Blender file stays the single source of truth for which paper is which, what
+    it tiles at, and how rough it is."""
+    tex = os.path.join(out_dir, "Textures")
+    os.makedirs(tex, exist_ok=True)
+    EXT = {"JPEG": ".jpg", "PNG": ".png", "TARGA": ".tga", "OPEN_EXR": ".exr"}
+    # every slot the kit writes, not just the papered ones -- a half-textured kit
+    # in Unity is worse than none: the artist cannot tell what is authored and
+    # what is a missing-material placeholder
+    want = [PAPER, PAPER_B, STONE, WOOD, WOODD, IRON, GLASS,
+            BOOK_A, BOOK_B, BOOK_C]
+    mats = [m for m in bpy.data.materials
+            if m.name.startswith(PFX + "Paper_") or m.name in want]
+    entries = []
+    for m in sorted(mats, key=lambda x: x.name):
+        maps, rec = _tex_role(m), {}
+        for role, img in maps.items():
+            ext = EXT.get(img.file_format, ".png")
+            fn = "%s_%s%s" % (m.name, role, ext)
+            path = os.path.join(tex, fn)
+            if img.packed_file:
+                with open(path, "wb") as fh:
+                    fh.write(img.packed_file.data)
+            else:
+                img.save(filepath=path)
+            rec[role] = "Textures/" + fn
+        bsdf = next((n for n in m.node_tree.nodes
+                     if n.type == "BSDF_PRINCIPLED"), None)
+        rough = float(bsdf.inputs["Roughness"].default_value) if bsdf else 0.8
+        # ★ A procedural material's colour lives in its RAMP, not on the BSDF
+        # socket, so reading the socket gives the 0.8 grey default and ships a
+        # dead-grey stone to Unity. Materials built from a graph carry their
+        # authored palette colour instead.
+        PALETTE = {STONE: srgb(C_STONE), PAPER: srgb(C_PAPER),
+                   PAPER_B: srgb(C_PAPER)}
+        col = (list(PALETTE[m.name]) if m.name in PALETTE
+               else list(bsdf.inputs["Base Color"].default_value)[:3]
+               if bsdf else [1, 1, 1])
+        kind = ("paper" if m.name.startswith(PFX + "Paper_")
+                else "wall" if m.name in (PAPER, PAPER_B)
+                else "timber" if m.name in (WOOD, WOODD)
+                else "glass" if m.name == GLASS
+                else "flat")
+        entries.append({
+            "name": m.name,
+            "kind": kind,
+            "color": [round(c, 4) for c in col],
+            "label": m.name.replace(PFX + "Paper_", "").replace("_", " "),
+            "tiling": _map_scale(m),
+            "smoothness": round(max(0.0, 1.0 - rough), 3),
+            "maps": rec,
+        })
+    man = {
+        "kit": "BiteClub",
+        "slots": {"wallA": PAPER, "wallB": PAPER_B, "wood": WOOD,
+                  "woodDark": WOODD, "stone": STONE, "iron": IRON,
+                  "glass": GLASS},
+        "uvPerMetre": {PAPER: UVS[PAPER], WOOD: UVS[WOOD]},
+        "materials": entries,
+    }
+    import json
+    with open(os.path.join(out_dir, "BiteClubKit.json"), "w") as fh:
+        json.dump(man, fh, indent=2)
+    return entries
+
+
 README = """# Bite Club -- Haunted House Modular Wall Kit
 
 Generated by `BiteClubKitGen.py` (Blender 5.2) from the concept sheet. One FBX
