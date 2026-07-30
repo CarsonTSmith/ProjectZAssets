@@ -1435,6 +1435,16 @@ def voussoirs(mb, cx, cz, r_in, r_out, y0, y1, mat=None, n=None, gap=0.015,
 # The wall now gives an opening a stone reveal and a voussoir ring, nothing else.
 
 
+# ★★ THE DOORWAY PIECES CARRY NO END COLUMN (user, 2026-07-30: "remove all
+# pillars from the doorway pieces"). An opening already brings its own vertical
+# accent -- the ring, the architrave the insert adds, and the reveal either side
+# -- and a post hard against that reads as clutter rather than as structure. All
+# three doorway shapes in BOTH families (arch, door, double door) therefore build
+# with `posts=False`, which drops the column AND the block over it, and the field
+# trim runs edge to edge behind the opening.
+# ⚠ The consequence is the same one Wall_Plain has: a doorway module covers no
+# module boundary, so the joint at its end is left in the open. Drop a free
+# standing `Pilaster` (or `Pillar`) on that joint if you want the rhythm kept.
 # ------------------------------------------------------------ wall pieces --
 def w_straight(mb):
     shell(mb, HW, [])
@@ -1611,7 +1621,7 @@ def w_arch(mb):
     """Walk-through arch: 2.20 m clear, springing at 1.90, head at 3.00."""
     o = spec(OP_A)
     shell(mb, HW, [o], m_a=M(STONE), m_b=M(STONE), m_e=M(STONE))
-    dress(mb, HW, [o], stone=True)
+    dress(mb, HW, [o], stone=True, posts=False)
     yp = HT + P1
     voussoirs(mb, 0.0, o["zs"], o["hw"] - 0.05, o["hw"] + RING, -yp, yp)
     # Threshold apron -- the concept's steps, kept low enough to walk. Step
@@ -1627,7 +1637,7 @@ def w_arch(mb):
 def w_door(mb):
     o = spec(OP_D)
     shell(mb, HW, [o])
-    dress(mb, HW, [o])
+    dress(mb, HW, [o], posts=False)
     yp = HT + P1
     voussoirs(mb, 0.0, o["zs"], o["hw"] - 0.05, o["hw"] + RING, -yp, yp)
 
@@ -1635,7 +1645,7 @@ def w_door(mb):
 def w_door_double(mb):
     o = spec(OP_DD)
     shell(mb, HW, [o])
-    dress(mb, HW, [o])
+    dress(mb, HW, [o], posts=False)
     yp = HT + P1
     voussoirs(mb, 0.0, o["zs"], o["hw"] - 0.05, o["hw"] + RING, -yp, yp)
 
@@ -1985,7 +1995,7 @@ def wi_arch(mb):
     insert brings, so `Arch_Door_Frame` still drops straight in."""
     o = spec(OP_A)
     int_shell(mb, HW, [o])
-    int_dress(mb, HW, [o])
+    int_dress(mb, HW, [o], posts=False)
     int_ring(mb, o)
     w = o["hw"] + CASE + SILL_LAP
     stone_shelf(mb, -w, w, o["z0"] + 0.04, p=P1, mat=M(WOOD))
@@ -1994,14 +2004,14 @@ def wi_arch(mb):
 def wi_door(mb):
     o = spec(OP_D)
     int_shell(mb, HW, [o])
-    int_dress(mb, HW, [o])
+    int_dress(mb, HW, [o], posts=False)
     int_ring(mb, o)
 
 
 def wi_door_double(mb):
     o = spec(OP_DD)
     int_shell(mb, HW, [o])
-    int_dress(mb, HW, [o])
+    int_dress(mb, HW, [o], posts=False)
     int_ring(mb, o)
 
 
