@@ -2,12 +2,18 @@
 BiteClubKitGen.py -- "Bite Club" haunted-house modular WALL kit, with doors and
 windows, authored from the concept sheet for export into Unity.
 
-Builds scene "BiteClubKit" (in BiteClubKit.blend). Three kit collections plus a
-catalogue and a demo room:
+Builds scene "BiteClubKit" (in BiteClubKit.blend). Four kit collections plus a
+catalogue and two demo rooms:
 
-    BC_Walls     11 wall modules  (straight / half / outer + inner corner /
-                                   broken / arch / door / double door /
-                                   window / small window / round window)
+    BC_Walls     14 wall modules  (straight / half / plain / plain half /
+                                   pillar / outer + inner corner / broken /
+                                   arch / door / double door / window /
+                                   small window / round window)
+    BC_Walls_Int 14 partitions    -- the same fourteen shapes finished as a ROOM
+                                   ON BOTH FACES: no stone anywhere, a panelled
+                                   wood pilaster where the outside wall has its
+                                   quoin post. Same lattice, same pivots, same
+                                   inserts, so the two families mix in one run.
     BC_Doors     11 door pieces   (door, double door, arch door, secret
                                    bookcase, barricaded door, trapdoor -- each
                                    frame plus its own hinged leaf mesh)
@@ -64,6 +70,12 @@ ROOT = "BiteClubKit"
 SCENE = "BiteClubKit"
 RAD = math.radians
 TAU = math.pi * 2.0
+
+# The collections that ARE the kit: everything exported, audited and counted.
+# One list, because a new family has to be picked up by the build gates the same
+# day it is authored -- audit_bevel() and audit_chamfer() looked at a hardcoded
+# three and would have skipped the interior walls in silence.
+KIT_COLLS = (PFX + "Walls", PFX + "Walls_Int", PFX + "Doors", PFX + "Windows")
 
 
 def srgb(h):
@@ -198,6 +210,27 @@ RAIL_Z, RAIL_P = 1.14, P2
 
 # Stone plinth on the stone-native pieces: exactly ONE course.
 BASE_Z, BASE_P = COURSE, P2
+
+# ------------------------------------------------- interior partition walls --
+# ★ THE INTERIOR SET IS THE SAME WALL WITH THE MASONRY TAKEN OUT. Every piece in
+# the Wall_Int_* family is finished as a ROOM on BOTH faces -- damask field,
+# skirting + plank wainscot + chair rail, wood head beam -- and carries no stone
+# anywhere: no quoin post, no voussoir ring, no plinth, no ashlar, no threshold
+# steps. Those are the outside of a building, and a partition has two insides.
+# What replaces the stone quoin is a PANELLED WOOD PILASTER on the same column
+# width and the same projection rung (PIL_W / PIL_P below), so the two families
+# live on ONE lattice and butt without a step: an outside wall can turn into a
+# partition mid-run and the joint still reads as one deliberate column.
+PAN_STILE = 0.09               # pilaster stile; an internal division gets two
+PAN_RAIL = 0.20                # rail over the plinth and under the capital
+PIL_CAP = 0.24                 # capital block, directly under the head beam
+PIL_ARM = 0.58                 # corner post arm -- the quoin's own long arm
+# ★ The wall's arch band is ONE CONTINUOUS member, never a segmented ring. The
+# insert that drops into the hole brings a SEGMENTED architrave (arch_frame), and
+# two segmented rings at slightly different radii interleave into noise -- the
+# same reason Arch_Door_Frame stopped emitting a ring of its own. Continuous and
+# one rung shallower, it reads as the lined reveal the architrave stands over.
+INT_RING_P = P1
 
 # --------------------------------------------------------------- openings --
 # One opening spec per host wall. Inserts are built from the SAME constants, so
@@ -1255,7 +1288,7 @@ def opening_sill(mb, o, top=None):
     stone_shelf(mb, -w, w, o["z0"] if top is None else top)
 
 
-def opening_plinths(mb, o):
+def opening_plinths(mb, o, mat=None):
     """Blocks at the feet of an opening's jambs: the concept sheet's square
     stones at the bottom of a door surround.
 
@@ -1263,7 +1296,7 @@ def opening_plinths(mb, o):
     full-width block there, which is a 0.22 m threshold you walk into."""
     for sgn in (-1.0, 1.0):
         a, b = sgn * o["hw"], sgn * (o["hw"] + CASE + SILL_LAP)
-        stone_shelf(mb, min(a, b), max(a, b), SILL_H)
+        stone_shelf(mb, min(a, b), max(a, b), SILL_H, mat=mat)
 
 
 def voussoirs(mb, cx, cz, r_in, r_out, y0, y1, mat=None, n=None, gap=0.015,
@@ -1337,14 +1370,18 @@ def w_pillar(mb):
     beam_block(mb, -BEAM_END, BEAM_END)   # = two module-end blocks butted
 
 
-def _corner_core(mb, outer_is_a):
+def _corner_core(mb, outer_is_a, m_e=None):
     """The L slab shared by both corner pieces, with each face on the right slot.
 
     `outer_is_a` selects which side gets slot 0. On the outer corner the convex
     faces are the building's outside; on the inner corner the CONCAVE faces are
     (that is what a reflex corner of an L-shaped plan means), so the two pieces
-    disagree about which side is which and a room still recolours consistently."""
-    ma, mb_, me = M(PAPER), M(PAPER_B), M(STONE)
+    disagree about which side is which and a room still recolours consistently.
+
+    `m_e` is the edge/reveal material -- stone on the exterior family, wood on the
+    interior one, which is the only reason the interior pieces carry no stone
+    slot at all."""
+    ma, mb_, me = M(PAPER), M(PAPER_B), M(STONE) if m_e is None else m_e
     before = set(mb.bm.faces)
     # ONE L-solid. Two butted wing boxes leave a bevelled seam running the full
     # height of the corner -- clearly visible as a bright crack on the outside
@@ -1520,6 +1557,326 @@ WALLS = [("Wall_Straight", w_straight), ("Wall_Half", w_half),
          ("Wall_Window_Round", w_window_round)]
 
 
+# --------------------------------------------------- interior wall pieces --
+# The same wall, the same lattice, the same inserts, with the exterior masonry
+# replaced by joinery so BOTH faces read as the inside of a room -- see the
+# "interior partition walls" block at the top of the file. One piece here for
+# every piece above, so a plan drawn with one family can be rebuilt with the
+# other without moving anything.
+
+def pilaster(mb, x0, x1):
+    """Panelled wood pilaster: the interior set's answer to the quoin post.
+
+    Dado-height plinth block, panelled shaft, capital under the head beam. The
+    panel layout is DERIVED FROM THE WIDTH -- one bay per PIL_W of column, a
+    stile on every division, and an internal division carrying two stiles' worth.
+    That is what makes the free-standing `Pilaster` identical to the two
+    module-end pilasters it replaces at a joint, the same invariant `Pillar`
+    holds against `quoin_col` and for the same reason: a run of Wall_Int_Plain
+    dressed with Pilasters has to be indistinguishable from a run of
+    Wall_Int_Straight.
+
+    ★ The plinth runs up to the CHAIR RAIL, not to the skirting. That is how a
+    real pilaster is built -- the plinth block is dado height -- and it also
+    keeps the sunk panel clear of the rail, which stands on the same P2 rung; two
+    members at one projection put coplanar faces in the same place, which is the
+    z-fight the ladder exists to prevent. Stiles and rails never overlap either:
+    the stiles own the full shaft height and the rails run BETWEEN them, so the
+    pilaster's front face is one plane with nothing competing for it."""
+    wood, dark = M(WOOD), M(WOODD)
+    yo0, yo1 = -HT - PIL_P, HT + PIL_P
+    z0, z1 = RAIL_Z, BEAM_Z - PIL_CAP
+    sl(mb, x0, x1, yo0, yo1, 0.0, RAIL_Z, dark)             # plinth block
+    sl(mb, x0, x1, yo0, yo1, z1, BEAM_Z, dark)              # capital
+    n = max(1, int(round((x1 - x0) / PIL_W)))
+    step = (x1 - x0) / n
+    for i in range(n + 1):
+        xc = x0 + i * step
+        sl(mb, xc if i == 0 else xc - PAN_STILE,
+           xc + PAN_STILE if i < n else xc, yo0, yo1, z0, z1, wood)
+    for i in range(n):
+        a, b = x0 + i * step + PAN_STILE, x0 + (i + 1) * step - PAN_STILE
+        sl(mb, a, b, yo0, yo1, z0, z0 + PAN_RAIL, wood)     # bottom rail
+        sl(mb, a, b, yo0, yo1, z1 - PAN_RAIL, z1, wood)     # top rail
+        # sunk panel: ONE rung shallower, which is the whole point of the ladder
+        sl(mb, a, b, -HT - P2, HT + P2, z0 + PAN_RAIL, z1 - PAN_RAIL, wood)
+
+
+def corner_post(mb, sgn=-1.0, arm=PIL_ARM, p=None):
+    """The pilaster turning a corner -- ONE L-solid per member, never two butted
+    arms (see `lpoly`), in the same three sections a straight pilaster uses so a
+    corner and the wall beside it read as one run of joinery.
+
+    `sgn` < 0 wraps the convex corner at (-HT,-HT), > 0 the reflex corner at
+    (+HT,+HT), exactly as `quoin_corner` / `quoin_inner` do."""
+    p = PIL_P if p is None else p
+    wood, dark = M(WOOD), M(WOODD)
+    for z0, z1, m in ((0.0, RAIL_Z, dark),
+                      (RAIL_Z, BEAM_Z - PIL_CAP, wood),
+                      (BEAM_Z - PIL_CAP, BEAM_Z, dark)):
+        if sgn < 0:
+            o, i_ = -HT - p, -HT
+            pts = [(o, o), (i_ + arm, o), (i_ + arm, i_), (i_, i_),
+                   (i_, i_ + arm), (o, i_ + arm)]
+        else:
+            o, i_ = HT + p, HT
+            pts = [(i_, i_), (i_ + arm, i_), (i_ + arm, o), (o, o),
+                   (o, i_ + arm), (i_, i_ + arm)]
+        lpoly(mb, pts, z0, z1, m)
+
+
+def arc_band(mb, cx, cz, r_in, r_out, a0, a1, y0, y1, mat, n=None):
+    """One continuous curved member: an annulus sector swept through the wall.
+
+    Facet count comes off ARC_S, the kit's one arc chord, so this band and the
+    opening it follows are cut at the same resolution. The sector's ends are
+    RADIAL, so the arc meets them square -- no arc ever runs tangent into a
+    straight cut here, which is the wedge that clamps the whole piece's chamfer."""
+    if n is None:
+        n = max(4, int(round(abs(a1 - a0) / ARC_S)))
+    pts = arc_pts(cx, cz, r_in, a0, a1, n) + arc_pts(cx, cz, r_out, a1, a0, n)
+    poly(mb, _dedupe(pts), y0, y1, mat)
+
+
+def int_ring(mb, o, proj=INT_RING_P, mat=None):
+    """The interior wall's own arch band -- continuous, not voussoirs (see
+    INT_RING_P). Like the stone ring it laps 0.05 INTO the hole, so the band and
+    not the cut defines the opening and any tolerance in the cut disappears
+    behind it.
+
+    A closed ring is FOUR butted quarters rather than one overlapping sweep: two
+    arcs of the same radius sampled from different start angles do not share
+    facet boundaries, and a pair of nearly-coincident curved surfaces is the
+    worst flicker in the book. Butted, the quarter's end caps are coincident with
+    OPPOSITE normals -- each buried in the other's solid -- and the chamfer at the
+    four joints reads as what it is, a built-up circular frame."""
+    mat = M(WOOD) if mat is None else mat
+    y0, y1 = -HT - proj, HT + proj
+    if o["kind"] == "arch":
+        arc_band(mb, o["cx"], o["zs"], o["hw"] - 0.05, o["hw"] + RING,
+                 0.0, math.pi, y0, y1, mat)
+    elif o["kind"] == "circle":
+        for q in range(4):
+            arc_band(mb, o["cx"], o["cz"], o["r"] - 0.05, o["r"] + RING,
+                     q * math.pi / 2.0, (q + 1) * math.pi / 2.0, y0, y1, mat)
+
+
+def int_stool(mb, o, top=None):
+    """Wood stool under an opening, or -- with `top` given -- the flat head over
+    one. Deliberately the same section as the stone sill (`stone_shelf`): ONE
+    member, ONE section, whichever family of walls it lands in."""
+    w = o["hw"] + CASE + SILL_LAP
+    stone_shelf(mb, -w, w, o["z0"] if top is None else top, mat=M(WOOD))
+
+
+def int_dress(mb, hw, opens, posts=True):
+    """The interior vocabulary: head beam, wainscot on BOTH faces, and a panelled
+    pilaster at each module end.
+
+    Same shape as `dress()` and for the same reasons -- the field trim runs the
+    FULL module width and the pilasters ride over it, so Wall_Int_Straight and
+    Wall_Int_Plain + Pilaster emit identical joinery."""
+    top_beam(mb, -hw, hw, ends=posts)
+    wainscot(mb, spans(hw, opens, 0.0, RAIL_Z))
+    if posts:
+        pilaster(mb, -hw, -hw + PIL_W)
+        pilaster(mb, hw - PIL_W, hw)
+
+
+def int_shell(mb, hw, opens):
+    """Interior shell: both faces papered, and the reveals WOOD -- an interior
+    opening is lined, not built out of masonry. Keeping stone off the edges is
+    also what leaves the interior pieces with no BC_Stone slot at all."""
+    shell(mb, hw, opens, m_e=M(WOOD))
+
+
+def wi_straight(mb):
+    int_shell(mb, HW, [])
+    int_dress(mb, HW, [])
+
+
+def wi_half(mb):
+    int_shell(mb, W2 / 2.0, [])
+    int_dress(mb, W2 / 2.0, [])
+
+
+def wi_plain(mb):
+    """4 m of partition with no end pilasters -- butt these in a run and drop
+    `Pilaster` wherever you actually want a column. The damask runs through the
+    butt joint (local UVs, 0.5 rep/m over a whole-metre module), so a run of
+    these reads as one continuous papered wall."""
+    int_shell(mb, HW, [])
+    int_dress(mb, HW, [], posts=False)
+
+
+def wi_plain_half(mb):
+    int_shell(mb, W2 / 2.0, [])
+    int_dress(mb, W2 / 2.0, [], posts=False)
+
+
+def wi_pilaster(mb):
+    """The panelled column on its own, 0.68 m wide -- exactly what two butted
+    Wall_Int_Straight ends make, down to the stile widths and the beam block.
+    Pivot is the column centre; it belongs on a wall JOINT, 2 m from a wall's own
+    pivot along the run. Interchangeable with `Pillar` on the same joint if you
+    want one stone column in a papered room."""
+    pilaster(mb, -PIL_W, PIL_W)
+    beam_block(mb, -BEAM_END, BEAM_END)     # = two module-end blocks butted
+
+
+def wi_corner(mb):
+    """Outer (convex) corner of a partition -- a chimney breast, a corridor
+    turning. Wings run +X and +Y with the post on the convex side, so a run
+    leaves the corner without a flip, same as `Wall_Corner`."""
+    _corner_core(mb, outer_is_a=True, m_e=M(WOOD))
+    corner_wainscot(mb, -1.0)
+    corner_wainscot(mb, 1.0)
+    _corner_beam(mb)
+    corner_post(mb, -1.0)
+
+
+def wi_corner_inside(mb):
+    """Inner (concave) corner: the post moves into the reflex notch, which is
+    what a reflex corner of an L-shaped room means."""
+    _corner_core(mb, outer_is_a=False, m_e=M(WOOD))
+    corner_wainscot(mb, -1.0)
+    corner_wainscot(mb, 1.0)
+    _corner_beam(mb)
+    corner_post(mb, 1.0)
+
+
+# Studs on 0.90 m centres and one noggin -- what an interior wall has where a
+# stone wall has a bond. Rooted well outside the breach so they read as framing
+# carried on past the damage, not as sticks dropped in the hole.
+STUD_X = (-0.90, 0.0, 0.90)
+
+
+def wi_broken(mb):
+    """Partition smashed through: studs, a noggin and snapped lath in the
+    breach, boards on the floor either side.
+
+    The outline is the SAME ragged course-by-course cut as `Wall_Broken` -- the
+    two damaged pieces have to look like the same event -- but what the hole
+    exposes is framing, because that is what is actually inside a papered
+    partition. Nothing here is stone.
+
+    ★ The breach sits between the CHAIR RAIL and the head beam, not down at the
+    plinth course the stone wall breaks from. Cut low, `spans()` takes the dado
+    out under the hole and leaves a bare papered stub where the skirting and
+    wainscot should still be -- which reads as missing trim, not as damage.
+    Starting at the rail leaves the dado standing as the parapet you actually
+    want to duck behind, and the rail's own top edge becomes the sill of the
+    hole."""
+    nc = max(1, int(round((BEAM_Z - RAIL_Z) / 0.44)))
+    ch = (BEAM_Z - RAIL_Z) / nc
+    opens = [op_rect((b - a) / 2.0, RAIL_Z + (i - 1) * ch, RAIL_Z + i * ch,
+                     cx=(a + b) / 2.0) for i, a, b in BREACH]
+    int_shell(mb, HW, opens)
+    int_dress(mb, HW, opens)
+    z_lo = min(o["z0"] for o in opens) - 0.40
+    z_hi = max(o["z1"] for o in opens) + 0.40
+    for x in STUD_X:
+        sl(mb, x - 0.05, x + 0.05, -0.045, 0.045, z_lo, z_hi, M(WOODD))
+    # ★ Noggins STAGGERED, one per bay. Run level across all three studs at
+    # mid-height and the centre stud crosses it into a perfect plus sign, which
+    # reads as a window mullion, not as framing.
+    zm = (z_lo + z_hi) / 2.0
+    for (a, b), dz in ((STUD_X[:2], 0.26), (STUD_X[1:], -0.38)):
+        sl(mb, a - 0.05, b + 0.05, -0.045, 0.045,
+           zm + dz - 0.06, zm + dz + 0.06, M(WOODD))
+    # lath snapped off the studs and left hanging -- TILTED, because a level
+    # board across a hole reads as a shelf someone fitted there, and each one
+    # crosses a stud so it hangs off something instead of floating
+    for x, z, ang in ((-0.75, 2.10, 24.0), (0.75, 2.86, -17.0),
+                      (0.15, 1.52, 13.0)):
+        for sgn in (-1.0, 1.0):
+            mb.box((x, sgn * 0.10, z), (0.38, 0.07, 0.07), M(WOOD),
+                   rot=(0.0, RAD(ang), 0.0))
+    # debris: symmetric, because both sides of this wall are a room
+    for sgn in (-1.0, 1.0):
+        for i, (x, ln, wd) in enumerate(((-0.95, 0.42, 0.11),
+                                         (0.35, 0.30, 0.09),
+                                         (1.20, 0.24, 0.08))):
+            y0c = sgn * (HT + P2 + 0.05 + 0.11 * i)
+            y1c = y0c + sgn * ln
+            sl(mb, x, x + wd + 0.06, min(y0c, y1c), max(y0c, y1c),
+               0.0, 0.07, M(WOODD))
+
+
+def wi_arch(mb):
+    """Walk-through arch between two rooms: 2.20 m clear, springing at 1.90.
+
+    Where the exterior arch lays a two-step stone apron, this gets a wood saddle
+    over the same 0.10 m threshold -- one rung shallower than the architrave the
+    insert brings, so `Arch_Door_Frame` still drops straight in."""
+    o = spec(OP_A)
+    int_shell(mb, HW, [o])
+    int_dress(mb, HW, [o])
+    int_ring(mb, o)
+    w = o["hw"] + CASE + SILL_LAP
+    stone_shelf(mb, -w, w, o["z0"] + 0.04, p=P1, mat=M(WOOD))
+
+
+def wi_door(mb):
+    o = spec(OP_D)
+    int_shell(mb, HW, [o])
+    int_dress(mb, HW, [o])
+    int_ring(mb, o)
+
+
+def wi_door_double(mb):
+    o = spec(OP_DD)
+    int_shell(mb, HW, [o])
+    int_dress(mb, HW, [o])
+    int_ring(mb, o)
+
+
+def wi_window(mb):
+    """Borrowed light: the tall window opening in a partition, with a wood stool
+    where the outside wall has a stone sill. Takes `Window_Tall` and
+    `Window_Boarded` unchanged."""
+    o = spec(OP_W)
+    int_shell(mb, HW, [o])
+    int_dress(mb, HW, [o])
+    int_ring(mb, o)
+    int_stool(mb, o)
+
+
+def wi_window_small(mb):
+    """Hatch-sized light. Flat head and stool are the same block, which is the
+    whole point of `stone_shelf` -- one section per member, either family."""
+    o = spec(OP_WS)
+    int_shell(mb, HW, [o])
+    int_dress(mb, HW, [o])
+    int_stool(mb, o, top=o["zs"] + SILL_H)
+    int_stool(mb, o)
+
+
+def wi_window_round(mb):
+    """Interior oculus, wood ring. NOTE the `Window_Round` insert brings a STONE
+    ring of its own at the prouder rung: fitted, it covers this one. Either
+    override the BC_Stone slot on that insert for interior use, or leave the
+    oculus bare and let the wall's own ring frame it."""
+    o = spec(OP_R)
+    int_shell(mb, HW, [o])
+    int_dress(mb, HW, [])
+    int_ring(mb, o)
+
+
+WALLS_INT = [("Wall_Int_Straight", wi_straight), ("Wall_Int_Half", wi_half),
+             ("Wall_Int_Plain", wi_plain),
+             ("Wall_Int_Plain_Half", wi_plain_half),
+             ("Pilaster", wi_pilaster),
+             ("Wall_Int_Corner", wi_corner),
+             ("Wall_Int_Corner_Inside", wi_corner_inside),
+             ("Wall_Int_Broken", wi_broken), ("Wall_Int_Arch", wi_arch),
+             ("Wall_Int_Door", wi_door),
+             ("Wall_Int_Door_Double", wi_door_double),
+             ("Wall_Int_Window", wi_window),
+             ("Wall_Int_Window_Small", wi_window_small),
+             ("Wall_Int_Window_Round", wi_window_round)]
+
+
 # ------------------------------------------------------------ door pieces --
 def ledged_leaf(mb, w, h, t, arch=False, mat=None, dark=None, iron=None,
                 x0=0.0, ledges=(0.22, 0.55, 0.88)):
@@ -1575,9 +1932,15 @@ def ring_pull(mb, cx, y, cz, r, iron=None, seg=14):
     sl(mb, cx - 0.07, cx + 0.07, y - 0.05, y + 0.05, cz + r - 0.02, cz + r + 0.14, iron)
 
 
-def arch_frame(mb, o, case=CASE, proj=P2, mat=None, key=True):
-    """Timber/stone architrave following an arched opening, with a keystone."""
+def arch_frame(mb, o, case=CASE, proj=P2, mat=None, key=True, key_mat=None):
+    """Timber/stone architrave following an arched opening, with a keystone.
+
+    `key_mat` is the ONE stone member on a door frame, which is exactly why it is
+    a parameter: dropped into an interior wall the frame has to be able to come
+    in wood, or a partition finished on both faces sprouts three chalk-coloured
+    blocks the moment you hang a door in it."""
     mat = M(WOOD) if mat is None else mat
+    key_mat = M(STONE) if key_mat is None else key_mat
     hw, zs, r = o["hw"], o["zs"], o["r"]
     y0, y1 = -HT - proj, HT + proj
     for sgn in (-1.0, 1.0):
@@ -1587,13 +1950,13 @@ def arch_frame(mb, o, case=CASE, proj=P2, mat=None, key=True):
     voussoirs(mb, 0.0, zs, r - 0.01, r + case, y0, y1, mat=mat, gap=0.012)
     if key:
         sl(mb, -CASE * 0.6, CASE * 0.6, y0 - 0.02, y1 + 0.02, zs + r - 0.04,
-           zs + r + case + 0.08, M(STONE))
+           zs + r + case + 0.08, key_mat)
 
 
-def d_door_frame(mb):
+def d_door_frame(mb, stone=None):
     o = spec(OP_D)
-    arch_frame(mb, o)
-    opening_plinths(mb, o)
+    arch_frame(mb, o, key_mat=stone)
+    opening_plinths(mb, o, mat=stone)
 
 
 def d_door_leaf(mb):
@@ -1608,10 +1971,10 @@ def d_door_leaf(mb):
     sl(mb, -w + 0.02, -w + 0.20, -0.13, -0.05, 1.09, 1.17, M(IRON))
 
 
-def d_double_frame(mb):
+def d_double_frame(mb, stone=None):
     o = spec(OP_DD)
-    arch_frame(mb, o)
-    opening_plinths(mb, o)
+    arch_frame(mb, o, key_mat=stone)
+    opening_plinths(mb, o, mat=stone)
 
 
 def _double_leaf(mb, side):
@@ -1656,7 +2019,7 @@ def d_double_leaf_r(mb):
     _double_leaf(mb, "R")
 
 
-def d_arch_frame(mb):
+def d_arch_frame(mb, stone=None):
     """Wood architrave + door stop for the Wall_Arch opening.
 
     ★ The STONE ring belongs to the wall, not to this piece. Emitting a second
@@ -1665,7 +2028,7 @@ def d_arch_frame(mb):
     the shared `arch_frame()` instead also puts every door frame in the kit on
     the same architrave: wood inside the wall's stone."""
     o = spec(OP_A)
-    arch_frame(mb, o)
+    arch_frame(mb, o, key_mat=stone)
     yp = HT + P2
     for sgn in (-1.0, 1.0):
         sl(mb, min(sgn * o["hw"], sgn * (o["hw"] - 0.07)),
@@ -1796,13 +2159,38 @@ def d_trap_leaf(mb):
     sl(mb, lw - 0.30, lw - 0.18, -0.13, 0.13, 0.08, 0.15, M(IRON))
 
 
+# ---------------------------------------------------- interior insert trim --
+# ★ FOUR inserts carried the only stone in the door and window sets -- a door
+# frame's keystone and its two jamb plinths, and the oculus ring. Dropped into a
+# Wall_Int_* those chalk-coloured blocks are the only thing on the piece still
+# saying "outside", and they sit at eye level exactly where you look. Each
+# variant below is the SAME builder with its one stone member handed a wood
+# material, so the two finishes can never drift apart: there is one door frame in
+# this kit, in two colours of the same joinery. Leaves, glazing and boarding
+# carry no stone and are shared unchanged.
+
+def d_door_frame_int(mb):
+    d_door_frame(mb, stone=M(WOODD))
+
+
+def d_double_frame_int(mb):
+    d_double_frame(mb, stone=M(WOODD))
+
+
+def d_arch_frame_int(mb):
+    d_arch_frame(mb, stone=M(WOODD))
+
+
 DOORS = [("Door_Frame", d_door_frame), ("Door_Leaf", d_door_leaf),
          ("Double_Door_Frame", d_double_frame),
          ("Double_Door_Leaf_L", d_double_leaf_l),
          ("Double_Door_Leaf_R", d_double_leaf_r),
          ("Arch_Door_Frame", d_arch_frame), ("Arch_Door_Leaf", d_arch_leaf),
          ("Secret_Door", d_secret), ("Barricaded_Door", d_barricaded),
-         ("Trapdoor_Frame", d_trap_frame), ("Trapdoor_Leaf", d_trap_leaf)]
+         ("Trapdoor_Frame", d_trap_frame), ("Trapdoor_Leaf", d_trap_leaf),
+         ("Door_Frame_Int", d_door_frame_int),
+         ("Double_Door_Frame_Int", d_double_frame_int),
+         ("Arch_Door_Frame_Int", d_arch_frame_int)]
 
 
 # ---------------------------------------------------------- window pieces --
@@ -1888,7 +2276,7 @@ def n_boarded(mb):
                -HT - P2 + 0.02, bz - IRON_W / 2, bz + IRON_W / 2, M(IRON))
 
 
-def n_round(mb):
+def n_round(mb, ring=None):
     o = spec(OP_R)
     r = o["r"]
     poly(mb, _dedupe(arc_pts(0.0, o["cz"], r - 0.05, 0.0, TAU, 28)),
@@ -1896,7 +2284,7 @@ def n_round(mb):
     sl(mb, -r + 0.05, r - 0.05, -0.05, 0.05, o["cz"] - 0.03, o["cz"] + 0.03, M(WOODD))
     sl(mb, -0.03, 0.03, -0.05, 0.05, o["cz"] - r + 0.05, o["cz"] + r - 0.05, M(WOODD))
     voussoirs(mb, 0.0, o["cz"], r - 0.03, r + RING, -HT - P2, HT + P2,
-              a0=0.0, a1=TAU)
+              mat=ring, a0=0.0, a1=TAU)
 
 
 def n_grate(mb):
@@ -1927,9 +2315,14 @@ def n_grate(mb):
            z - IRON_W / 2, z + IRON_W / 2, M(IRON))
 
 
+def n_round_int(mb):
+    """The oculus ring in wood -- see the interior insert note above DOORS."""
+    n_round(mb, ring=M(WOODD))
+
+
 WINDOWS = [("Window_Small", n_small), ("Window_Tall", n_tall),
            ("Window_Boarded", n_boarded), ("Window_Round", n_round),
-           ("Secret_Grate", n_grate)]
+           ("Secret_Grate", n_grate), ("Window_Round_Int", n_round_int)]
 
 
 # ------------------------------------------------------------- materials ---
@@ -2161,19 +2554,60 @@ SEAM_C = [("x", CWING), ("y", CWING)]
 
 
 def seam_for(name):
-    if name == "Pillar":
+    # ★ Matched on shape, not on a list of names: the interior family repeats
+    # every shape in the kit, and a name list is exactly the kind of thing that
+    # silently misses half of it (a Wall_Int_Half without SEAM_X2 gets its butt
+    # edge chamfered and shows a hairline down every joint).
+    if name in POSTS:
         return SEAM_Z
-    if name in ("Wall_Half", "Wall_Plain_Half"):
+    if name.endswith("_Half"):
         return SEAM_X2 + SEAM_Z
-    if name.startswith("Wall_Corner"):
+    if "Corner" in name:
         return SEAM_C + SEAM_Z
     if name.startswith("Wall_"):
         return SEAM_X4 + SEAM_Z
     return None
 
 
-ROW_Y = {"Walls": 0.0, "Doors": 13.0, "Windows": 24.0}
+# The free-standing columns: dropped ON a finished run, so they defer on the top
+# datum (see `defer_top` in out()) instead of fighting the beam cap for it.
+POSTS = ("Pillar", "Pilaster")
+
+ROW_Y = {"Walls": 0.0, "WallsInt": -13.0, "Doors": 13.0, "Windows": 24.0}
+ROW_TITLE = {"Walls": "WALLS", "WallsInt": "INTERIOR WALLS",
+             "Doors": "DOORS", "Windows": "WINDOWS"}
 STEP = 5.4
+
+# Inserts shown fitted into their host wall, which is the whole point of sharing
+# the pivot -- if a frame drifts, this row shows it immediately. ★ Module level so
+# the row's cameras can be derived from its length: hardcoding the count is how a
+# camera ends up pointing at whatever moved into its place. Every interior host
+# takes the SAME insert as its exterior twin, which is what the last six rows
+# check -- the openings are one set of constants for both families.
+FITTED = [("Wall_Door", ["Door_Frame"], [("Door_Leaf", DOOR_HINGE, RAD(-28))]),
+          ("Wall_Door_Double", ["Double_Door_Frame"],
+           [("Double_Door_Leaf_L", -DD_HINGE, RAD(-24)),
+            ("Double_Door_Leaf_R", DD_HINGE, RAD(24))]),
+          ("Wall_Arch", ["Arch_Door_Frame"], [("Arch_Door_Leaf", OP_A["hw"] - 0.05,
+                                               RAD(-34))]),
+          ("Wall_Door", ["Barricaded_Door"], []),
+          ("Wall_Door", ["Secret_Door"], []),
+          ("Wall_Window", ["Window_Tall"], []),
+          ("Wall_Window", ["Window_Boarded"], []),
+          ("Wall_Window_Small", ["Window_Small"], []),
+          ("Wall_Window_Small", ["Secret_Grate"], []),
+          ("Wall_Window_Round", ["Window_Round"], []),
+          ("Wall_Int_Door", ["Door_Frame_Int"],
+           [("Door_Leaf", DOOR_HINGE, RAD(-28))]),
+          ("Wall_Int_Door_Double", ["Double_Door_Frame_Int"],
+           [("Double_Door_Leaf_L", -DD_HINGE, RAD(-24)),
+            ("Double_Door_Leaf_R", DD_HINGE, RAD(24))]),
+          ("Wall_Int_Arch", ["Arch_Door_Frame_Int"],
+           [("Arch_Door_Leaf", OP_A["hw"] - 0.05, RAD(-34))]),
+          ("Wall_Int_Door", ["Secret_Door"], []),
+          ("Wall_Int_Window", ["Window_Tall"], []),
+          ("Wall_Int_Window_Small", ["Window_Small"], []),
+          ("Wall_Int_Window_Round", ["Window_Round_Int"], [])]
 # Well clear of the catalogue: the row cameras stand 22 m in FRONT of the walls
 # row, and at -22 the demo room swallowed them whole -- every "row" shot was
 # really an interior of the demo.
@@ -2193,6 +2627,7 @@ def build():
     bpy.context.window.scene = scene
     root = BK.ensure_coll(ROOT, scene.collection)
     c_w = BK.ensure_coll(PFX + "Walls", root)
+    c_i = BK.ensure_coll(PFX + "Walls_Int", root)
     c_d = BK.ensure_coll(PFX + "Doors", root)
     c_n = BK.ensure_coll(PFX + "Windows", root)
     c_x = BK.ensure_coll(PFX + "Demo", root)
@@ -2200,39 +2635,25 @@ def build():
     c_l = BK.ensure_coll(PFX + "Preview", root)
     c_g = BK.ensure_coll(PFX + "Lighting", root)
     labs = {r: BK.ensure_coll(PFX + "Lab_" + r, c_l)
-            for r in ("Walls", "Doors", "Windows", "Fitted")}
+            for r in ("Walls", "WallsInt", "Doors", "Windows", "Fitted")}
     c_s = BK.ensure_coll(PFX + "Stage", c_l)
 
-    ground_plane(c_s, "Stage", 26.0, 10.0, 120.0, 84.0)
+    ground_plane(c_s, "Stage", 26.0, 4.0, 120.0, 96.0)
 
-    for coll, items, row in ((c_w, WALLS, "Walls"), (c_d, DOORS, "Doors"),
-                             (c_n, WINDOWS, "Windows")):
+    for coll, items, row in ((c_w, WALLS, "Walls"), (c_i, WALLS_INT, "WallsInt"),
+                             (c_d, DOORS, "Doors"), (c_n, WINDOWS, "Windows")):
         y = ROW_Y[row]
         for i, (name, fn) in enumerate(items):
             mb = MB(name, PFX)
             fn(mb)
             ob = out(mb, coll, (i * STEP, y, 0.0), seam=seam_for(name),
-                     insert=(row != "Walls"), defer_top=(name == "Pillar"))
+                     insert=(row in ("Doors", "Windows")),
+                     defer_top=(name in POSTS))
             label(labs[row], name, (i * STEP, y - 2.7, 0.30), size=0.30)
-        label(labs[row], row.upper(), (-STEP - 0.4, y - 2.7, 0.90), size=0.52)
+        label(labs[row], ROW_TITLE[row], (-STEP - 0.4, y - 2.7, 0.90), size=0.52)
 
     K = bpy.data.objects
-    # inserts shown fitted into their host wall, which is the whole point of
-    # sharing the pivot -- if a frame drifts, this row shows it immediately
-    fitted = [("Wall_Door", ["Door_Frame"], [("Door_Leaf", DOOR_HINGE, RAD(-28))]),
-              ("Wall_Door_Double", ["Double_Door_Frame"],
-               [("Double_Door_Leaf_L", -DD_HINGE, RAD(-24)),
-                ("Double_Door_Leaf_R", DD_HINGE, RAD(24))]),
-              ("Wall_Arch", ["Arch_Door_Frame"], [("Arch_Door_Leaf", OP_A["hw"] - 0.05,
-                                                   RAD(-34))]),
-              ("Wall_Door", ["Barricaded_Door"], []),
-              ("Wall_Door", ["Secret_Door"], []),
-              ("Wall_Window", ["Window_Tall"], []),
-              ("Wall_Window", ["Window_Boarded"], []),
-              ("Wall_Window_Small", ["Window_Small"], []),
-              ("Wall_Window_Small", ["Secret_Grate"], []),
-              ("Wall_Window_Round", ["Window_Round"], [])]
-    for i, (wall, frames, leaves) in enumerate(fitted):
+    for i, (wall, frames, leaves) in enumerate(FITTED):
         p = (i * STEP, ROW_Y["Windows"] + 9.0, 0.0)
         dup(K[PFX + wall], c_f, p)
         for f in frames:
@@ -2248,6 +2669,7 @@ def build():
           size=0.52)
 
     demo_room(c_x, (6.0, DEMO_Y))
+    int_rooms(c_x, (0.0, DEMO_Y - 30.0))
     world_and_lights(scene, c_g)
     cd = bpy.data.cameras.new(PFX + "Cam")
     cam = bpy.data.objects.new(PFX + "Cam", cd)
@@ -2269,7 +2691,7 @@ def build():
     audit_bevel()
     audit_chamfer()
     tris = 0
-    for c in (c_w, c_d, c_n):
+    for c in (c_w, c_i, c_d, c_n):
         for o in c.objects:
             if o.type == "MESH":
                 tris += len(o.data.polygons)
@@ -2289,7 +2711,7 @@ def audit_bevel(report=True):
     (thin wedges inside big islands, e.g. an arc tangent to a cut line, which
     no bounding-box test can see). Run both after any new piece."""
     bad = []
-    for cn in (PFX + "Walls", PFX + "Doors", PFX + "Windows"):
+    for cn in KIT_COLLS:
         for ob in bpy.data.collections[cn].objects:
             if ob.type != "MESH":
                 continue
@@ -2341,7 +2763,7 @@ def audit_chamfer(report=True):
     chamfer."""
     dg = bpy.context.evaluated_depsgraph_get()
     meds = {}
-    for cn in (PFX + "Walls", PFX + "Doors", PFX + "Windows"):
+    for cn in KIT_COLLS:
         for ob in bpy.data.collections[cn].objects:
             if ob.type != "MESH" or not ob.modifiers.get("Bevel"):
                 continue
@@ -2402,6 +2824,54 @@ def demo_room(coll, org):
     dup(K[PFX + "Trapdoor_Frame"], coll, (ox + 3.0, oy, 0.0), 0.0)
     dup(K[PFX + "Trapdoor_Leaf"], coll, (ox + 3.0 + TRAP_HINGE, oy, 0.0), 0.0)
     pillar_run(coll, (ox - 12.0, oy - 14.0))
+
+
+def int_rooms(coll, org):
+    """Two rooms sharing ONE partition -- the check that the interior set reads
+    as a room finish from BOTH sides, which is the whole claim of the family.
+
+    Shot from either side (demo_int / demo_int2). The run also mixes the two
+    families on one lattice: a `Pillar` on the return wall's joint where the rest
+    of the run carries `Pilaster`, which is only legible if the stone column and
+    the panelled one really are the same width on the same rung."""
+    K = bpy.data.objects
+    ox, oy = org
+    ground_plane(coll, "Int_Floor", ox + 6.0, oy + 6.0, 36.0, 32.0, top=-0.02)
+    # the partition itself: 16 m across the middle, with the door and window a
+    # character actually uses and the smashed module at the far end
+    for i, nm in enumerate(("Wall_Int_Straight", "Wall_Int_Door",
+                            "Wall_Int_Window", "Wall_Int_Broken")):
+        dup(K[PFX + nm], coll, (ox + 4.0 * i, oy, 0.0), 0.0)
+    dup(K[PFX + "Door_Frame_Int"], coll, (ox + 4.0, oy, 0.0), 0.0)
+    dup(K[PFX + "Door_Leaf"], coll, (ox + 4.0 + DOOR_HINGE, oy, 0.0), RAD(-64))
+    dup(K[PFX + "Window_Tall"], coll, (ox + 8.0, oy, 0.0), 0.0)
+    # West return: corner on the lattice intersection, then Wall_Int_Plain with
+    # Pilasters dropped on the JOINTS -- the interior half of the Plain + column
+    # trick, so the columns land every 8 m instead of every 4.
+    # ★ Columns go on Plain JOINTS only. Dropping one on a joint where a
+    # Straight-family module already carries its own end post puts two identical
+    # pilasters in the same 0.34 m of wall -- the same geometry twice over, which
+    # is the one clash no amount of deconfliction can fix.
+    # ★ And no `Pillar` in here, deliberately: the two families DO mix on one
+    # lattice (same width, same rung, and the catalogue rows prove it), but a
+    # lavender stone column in the middle of the plate that exists to show a room
+    # papered on both sides just reads as a mistake.
+    dup(K[PFX + "Wall_Int_Corner"], coll, (ox - 4.0, oy, 0.0), 0.0)
+    for i in range(3):
+        dup(K[PFX + "Wall_Int_Plain"], coll, (ox - 4.0, oy + 4.0 * i + 4.0, 0.0),
+            RAD(90))
+    dup(K[PFX + "Pilaster"], coll, (ox - 4.0, oy + 6.0, 0.0), RAD(90))
+    dup(K[PFX + "Pilaster"], coll, (ox - 4.0, oy + 10.0, 0.0), RAD(90))
+    dup(K[PFX + "Pilaster"], coll, (ox - 4.0, oy + 14.0, 0.0), RAD(90))
+    # east return: the walk-through arch a room away from the door, then the
+    # oculus above the dado -- both Straight-family, so their joint reads as one
+    # full column the way a butted pair is meant to
+    dup(K[PFX + "Wall_Int_Corner"], coll, (ox + 16.0, oy, 0.0), RAD(90))
+    dup(K[PFX + "Wall_Int_Arch"], coll, (ox + 16.0, oy + 4.0, 0.0), RAD(90))
+    dup(K[PFX + "Arch_Door_Frame_Int"], coll, (ox + 16.0, oy + 4.0, 0.0), RAD(90))
+    dup(K[PFX + "Wall_Int_Window_Round"], coll, (ox + 16.0, oy + 8.0, 0.0),
+        RAD(90))
+    dup(K[PFX + "Wall_Int_Half"], coll, (ox + 16.0, oy + 11.0, 0.0), RAD(90))
 
 
 def pillar_run(coll, org):
@@ -2467,8 +2937,12 @@ def _row_shots(tag, y, n, per=4, dist=22.0, lens=35.0, z=2.15, tz=1.95):
 
 
 DX, DY = 6.0, DEMO_Y
+IX, IY = 0.0, DEMO_Y - 30.0          # the interior-partition demo's origin
 SHOTS = {
-    "overview":   ((66.0, -52.0, 44.0), (24.0, 14.0, 0.0), 40),
+    # pulled back when the interior row was added -- the plate is only useful if
+    # it holds ALL of the rows, and a fourth one shifts the whole layout toward
+    # the lens
+    "overview":   ((84.0, -82.0, 64.0), (34.0, 5.0, 0.0), 40),
     "demo_hero":  ((DX - 19.0, DY - 22.0, 9.5), (DX, DY, 1.6), 34),
     "demo_close": ((DX - 5.0, DY - 13.0, 2.4), (DX - 2.0, DY - 4.0, 1.8), 34),
     "demo_in":    ((DX - 3.0, DY - 2.6, 1.70), (DX + 3.5, DY + 2.0, 1.90), 20),
@@ -2476,6 +2950,14 @@ SHOTS = {
     # the Wall_Plain + Pillar spacing demo, shot along its 32 m face
     "demo_run":   ((DX + 2.0, DY - 32.0, 2.6), (DX + 2.0, DY - 14.0, 2.0), 20),
     "demo_run2":  ((DX - 14.0, DY - 25.0, 3.2), (DX + 6.0, DY - 14.0, 1.9), 34),
+    # ★ The interior partition from BOTH sides, which is the entire claim of the
+    # Wall_Int_ family: one plate per room, and neither may show a stone face.
+    "demo_int":   ((IX - 7.0, IY - 15.0, 3.6), (IX + 6.0, IY + 1.0, 1.9), 30),
+    # ★ The far side is shot from INSIDE the north room, not from outside its
+    # returns -- stand off and the return wall is simply in the way, which is what
+    # made the first version of this plate a picture of a corner.
+    "demo_int2":  ((IX + 8.5, IY + 13.0, 3.1), (IX + 6.0, IY - 0.5, 1.70), 24),
+    "demo_int3":  ((IX + 3.0, IY - 5.4, 1.72), (IX + 5.0, IY + 6.0, 1.90), 22),
 }
 
 
@@ -2494,16 +2976,27 @@ SHOTS["walls_corner"] = ((_px("Wall_Corner") - 5.6, -7.4, 3.4),
                          (_px("Wall_Corner") + 2.4, 0.6, 1.9), 42)
 SHOTS["walls_broken"] = ((_px("Wall_Broken"), -9.5, 2.1),
                          (_px("Wall_Broken"), 0.0, 2.0), 45)
+_IY = ROW_Y["WallsInt"]
+SHOTS["wallsint_corner"] = ((_px("Wall_Int_Corner", WALLS_INT) - 5.6, _IY - 7.4, 3.4),
+                            (_px("Wall_Int_Corner", WALLS_INT) + 2.4, _IY + 0.6,
+                             1.9), 42)
+SHOTS["wallsint_broken"] = ((_px("Wall_Int_Broken", WALLS_INT), _IY - 9.5, 2.1),
+                            (_px("Wall_Int_Broken", WALLS_INT), _IY, 2.0), 45)
+# the panelled pilaster IS the interior answer to the quoin post, so it gets the
+# same close look the stone one never needed: read it against its own wall
+SHOTS["wallsint_post"] = ((_px("Pilaster", WALLS_INT) - 2.2, _IY - 4.6, 2.2),
+                          (_px("Pilaster", WALLS_INT) + 0.6, _IY, 1.8), 50)
 # the trapdoor lies flat -- edge-on in a row plate it is a pencil line
 _tx = (_px("Trapdoor_Frame", DOORS) + _px("Trapdoor_Leaf", DOORS)) / 2.0
 SHOTS["doors_trap"] = ((_tx, ROW_Y["Doors"] - 8.6, 8.0),
                        (_tx, ROW_Y["Doors"], 0.0), 40)
 SHOTS.update(_row_shots("walls", ROW_Y["Walls"], len(WALLS)))
+SHOTS.update(_row_shots("wallsint", ROW_Y["WallsInt"], len(WALLS_INT)))
 SHOTS.update(_row_shots("doors", ROW_Y["Doors"], len(DOORS), dist=17.0, lens=38.0,
                         z=1.75, tz=1.55))
 SHOTS.update(_row_shots("windows", ROW_Y["Windows"], len(WINDOWS), dist=15.0,
                         lens=38.0, z=1.95, tz=1.85))
-SHOTS.update(_row_shots("fitted", ROW_Y["Windows"] + 9.0, 10))
+SHOTS.update(_row_shots("fitted", ROW_Y["Windows"] + 9.0, len(FITTED)))
 
 
 def aim(cam, loc, tgt, lens):
@@ -2516,11 +3009,13 @@ def aim(cam, loc, tgt, lens):
 # catalogue stays compact to work in, which means a row camera stands level with
 # -- or inside -- its neighbours. Isolating the row is cheaper than spreading the
 # layout over 100 m, and gives clean sheet-style plates either way.
-ISO = [PFX + "Walls", PFX + "Doors", PFX + "Windows", PFX + "Fitted",
-       PFX + "Demo", PFX + "Stage", PFX + "Lab_Walls", PFX + "Lab_Doors",
+ISO = [PFX + "Walls", PFX + "Walls_Int", PFX + "Doors", PFX + "Windows",
+       PFX + "Fitted", PFX + "Demo", PFX + "Stage", PFX + "Lab_Walls",
+       PFX + "Lab_WallsInt", PFX + "Lab_Doors",
        PFX + "Lab_Windows", PFX + "Lab_Fitted"]
 _ST = PFX + "Stage"
 ROW_COLL = {"walls": [PFX + "Walls", PFX + "Lab_Walls", _ST],
+            "wallsint": [PFX + "Walls_Int", PFX + "Lab_WallsInt", _ST],
             "doors": [PFX + "Doors", PFX + "Lab_Doors", _ST],
             "windows": [PFX + "Windows", PFX + "Lab_Windows", _ST],
             "fitted": [PFX + "Fitted", PFX + "Lab_Fitted", _ST],
@@ -2573,7 +3068,7 @@ def export_fbx(out_dir):
     scene = bpy.data.scenes[SCENE]
     view = scene.view_layers[0]
     written = []
-    for cn in (PFX + "Walls", PFX + "Doors", PFX + "Windows"):
+    for cn in KIT_COLLS:
         for ob in list(bpy.data.collections[cn].objects):
             if ob.type != "MESH":
                 continue
@@ -2639,6 +3134,8 @@ The damask does not restart at a butt joint: UVs are projected in each piece's
 local space at 0.5 repeats/m over a whole-metre module, so the pattern runs
 straight through. A `Wall_Plain` run reads as one continuous wall.
 
+%s
+
 ## Pivots and orientation
 
 Every wall piece's origin is the **bottom centre of its module footprint, on the
@@ -2667,6 +3164,9 @@ Doors and windows are **not** baked into the walls. Drop the insert at the
 | `Wall_Window` | `Window_Tall`, `Window_Boarded` |
 | `Wall_Window_Small` | `Window_Small`, `Secret_Grate` |
 | `Wall_Window_Round` | `Window_Round` |
+
+Every `Wall_Int_*` host takes the same inserts as its exterior twin -- the
+openings are one set of constants for both families.
 
 ## Hinges
 
@@ -2769,9 +3269,9 @@ on every build and print anything off the kit norm.
 | **Chamfer** | **%.3f m, %d segments** | **every edge on every piece** |
 | Minimum member | **%.3f m** | below this the chamfer is silently clamped |
 
-The chamfer is weight-limited on all 30 pieces (module-boundary edges excluded
-so butted modules never show a hairline), never angle-limited on some and
-weight-limited on others -- so the rounding radius is identical kit-wide.
+The chamfer is weight-limited on every piece in the kit (module-boundary edges
+excluded so butted modules never show a hairline), never angle-limited on some
+and weight-limited on others -- so the rounding radius is identical kit-wide.
 
 Three rules follow from that and are worth knowing before you author anything
 new:
@@ -2812,7 +3312,10 @@ knife-edge sampling, not geometry.
 %d shared materials. Slot order is canonical on every piece, so **slot 0 is the
 -Y (exterior) wall face and slot 1 the +Y (interior) face** on every wall
 module: recolouring a room inside and out is two material overrides and no new
-geometry.
+geometry. On the `Wall_Int_*` family both of those faces are room faces, so slot
+0 and slot 1 are simply **the two rooms** -- paper them differently and one
+partition serves a purple parlour on one side and a green one on the other. The
+interior pieces carry **no `BC_Stone` slot at all**; their reveals are wood.
 
 | Slot name | Use |
 |---|---|
@@ -2844,6 +3347,59 @@ the catalogue plates.
 """
 
 
+README_INT = """## Interior walls -- `Wall_Int_*`, a room on BOTH faces
+
+Fourteen partition modules, one for every shape in the exterior set, finished as
+the inside of a room on **both** sides: damask field, skirting + plank wainscot
++ chair rail, wood head beam. They carry **no stone at all** -- no quoin post, no
+voussoir ring, no plinth, no ashlar, no threshold steps -- because those are the
+outside of a building and a partition has two insides. Use them anywhere both
+faces are seen from a room: between two rooms, along a corridor, around a
+stairwell, dividing a hall.
+
+What replaces the stone quoin is a **panelled wood pilaster** on the same column
+width (%.2f m per module end, %.2f m for the free-standing piece) and the same
+projection rung, so the two families sit on ONE lattice and butt without a step.
+An outside wall can turn into a partition mid-run and the joint still reads as
+one deliberate column.
+
+| Interior piece | Exterior twin | Notes |
+|---|---|---|
+| `Wall_Int_Straight` / `_Half` | `Wall_Straight` / `Wall_Half` | pilaster at both ends |
+| `Wall_Int_Plain` / `_Plain_Half` | `Wall_Plain` / `Wall_Plain_Half` | no end columns -- butt in runs |
+| `Pilaster` | `Pillar` | free-standing column, %.2f m wide, drop on a JOINT |
+| `Wall_Int_Corner` / `_Corner_Inside` | same | convex / reflex corner post |
+| `Wall_Int_Broken` | `Wall_Broken` | studs, noggin and snapped lath in the breach |
+| `Wall_Int_Arch` | `Wall_Arch` | wood saddle instead of the stone step apron |
+| `Wall_Int_Door` / `_Door_Double` | same | wood arch band, continuous |
+| `Wall_Int_Window` / `_Window_Small` | same | wood stool where the outside has a stone sill |
+| `Wall_Int_Window_Round` | same | wood ring |
+
+**The openings are identical**, so every insert fits either family unchanged:
+`Wall_Int_Door` takes `Door_Frame`, `Barricaded_Door` and `Secret_Door`,
+`Wall_Int_Arch` takes `Arch_Door_Frame`, `Wall_Int_Window` takes `Window_Tall`
+and `Window_Boarded`, and so on down the table in the next section. The catalogue
+ships a `BC_Fitted` row that shows exactly this.
+
+One insert to watch: **`Window_Round` brings a stone ring of its own** at the
+prouder rung, so fitted into `Wall_Int_Window_Round` it covers the wall's wood
+ring with stone. Override its `BC_Stone` slot for interior use, or leave the
+oculus bare and let the wall's own ring frame it.
+
+Two things follow from the shared lattice and are worth knowing before you build
+a run:
+
+- **Columns go on `Plain` joints only.** Dropping a `Pilaster` (or a `Pillar`) on
+  a joint where a Straight-family module already carries its own end post puts
+  two identical columns in the same 0.34 m of wall. Same geometry twice over is
+  the one clash no depth-buffer trick can fix.
+- **Partitions are the same 0.30 m thick as the outside walls.** A real interior
+  stud wall would be thinner, but the thickness is what every insert's reveal,
+  architrave and glazing depth is cut against -- thinning it would fork the
+  entire door and window set for no gameplay gain.
+"""
+
+
 def write_readme(out_dir, written):
     rows = {}
     for n in written:
@@ -2852,6 +3408,7 @@ def write_readme(out_dir, written):
         "- `%s`" % n.replace(PFX, "") for n in written)
     mats = len([m for m in CANON if m not in (LABEL, STAGE)])
     txt = README % (
+        README_INT % (PIL_W, 2 * PIL_W, 2 * PIL_W),
         DOOR_HINGE, -DD_HINGE, DD_HINGE, OP_A["hw"] - 0.05,
         SECRET_HINGE, -(HT + 0.24), TRAP_HINGE,
         2 * OP_D["hw"], OP_D["zs"] + OP_D["r"],
