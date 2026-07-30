@@ -187,6 +187,15 @@ SEAM_BAND = DATUM_RANKS * DATUM_EPS + 1e-4
 # wall-face planes; nothing but the wall's structural bottom may sit ON the
 # floor datum, so an insert lifts off it.
 INSERT_EPS = 0.0015
+# ★★ CASE_LAP -- the same hairline, applied to the OPENING planes rather than the
+# wall-face rungs. lift_insert() only knows about y = +/-(HT+p) and the floor, so
+# a frame's jamb, head and sill returns still landed exactly on the wall's own
+# REVEAL: coplanar, same-facing, both plainly visible from inside the opening,
+# and belonging to two different meshes, so nothing in the kit could arbitrate
+# them. Measured on the assembled demo: 0.30 m2 per jamb on every window wall and
+# 0.80 m2 on the small window's head, flickering wood against wood. Every casing
+# member therefore laps INSERT_EPS INTO the opening -- the insert covers the cut,
+# which is what a lining is for, and the clear opening loses 3 mm.
 
 # Stone quoin post at each module end. Full width (not a half post) because the
 # concept sheet draws a complete post on an isolated piece; two butted modules
@@ -1128,7 +1137,7 @@ def corner_wainscot(mb, sgn=-1.0):
         plank_run(mb, lo, hi, HT + WAIN_P, CWING, SKIRT_Z, WAIN_Z, mat, axis="y")
 
 
-def beam_block(mb, x0, x1, mat=None, p=None):
+def beam_block(mb, x0, x1, mat=None, p=None, z0=BEAM_Z):
     """The heavy dark block that caps a post where it meets the head beam.
 
     Factored out so Wall_Straight's ends, the corner and the free-standing
@@ -1139,11 +1148,19 @@ def beam_block(mb, x0, x1, mat=None, p=None):
     ★ `p` is the projection, because the interior family wants the block FLUSH
     with the column under it (PIL_P) rather than the extra 20 mm the masonry
     blocks stand proud. A block wider or prouder than its own post turns the top
-    of the column into a step -- see `int_dress`."""
+    of the column into a step -- see `int_dress`.
+
+    ★★ `z0` is how a FREE-STANDING column (Pillar, Pilaster) drops below the beam
+    datum. On a wall the block and the head beam are one mesh and deconflict()
+    arbitrates their shared underside; dropped onto a finished run they are two
+    meshes and nothing can, so the block's soffit and the beam's soffit flicker
+    against each other over the whole footprint of the column. A hairline lower
+    and the applied column simply stands over the beam it dresses, which is the
+    same rule lift_insert applies to a door frame."""
     p = BEAM_CAP_P + 0.02 if p is None else p
     # starts exactly AT the beam datum, so it sits on the post rather than
     # cutting 100 mm into its top course
-    sl(mb, x0, x1, -HT - p, HT + p, BEAM_Z, H,
+    sl(mb, x0, x1, -HT - p, HT + p, z0, H,
        M(WOODD) if mat is None else mat)
 
 
@@ -1353,7 +1370,8 @@ def opening_plinths(mb, o, mat=None):
     Deliberately NOT carried across the opening. The door frames used to lay a
     full-width block there, which is a 0.22 m threshold you walk into."""
     for sgn in (-1.0, 1.0):
-        a, b = sgn * o["hw"], sgn * (o["hw"] + CASE + SILL_LAP)
+        a = sgn * (o["hw"] - INSERT_EPS)    # laps the reveal, as arch_frame does
+        b = sgn * (o["hw"] + CASE + SILL_LAP)
         stone_shelf(mb, min(a, b), max(a, b), SILL_H, mat=mat)
 
 
@@ -1425,7 +1443,8 @@ def w_pillar(mb):
     indistinguishable from a Wall_Straight run. Pivot is the column centre;
     drop it on a wall JOINT (2 m from a wall's own pivot along the run)."""
     quoin_col(mb, -PIL_W, PIL_W, 0.0, BEAM_Z, bond="both")
-    beam_block(mb, -BEAM_END, BEAM_END)   # = two module-end blocks butted
+    beam_block(mb, -BEAM_END, BEAM_END,   # = two module-end blocks butted
+               z0=BEAM_Z - INSERT_EPS)    # ...standing over the run's own beam
 
 
 def _corner_core(mb, outer_is_a, m_e=None):
@@ -1639,7 +1658,7 @@ WALLS = [("Wall_Straight", w_straight), ("Wall_Half", w_half),
 # every piece above, so a plan drawn with one family can be rebuilt with the
 # other without moving anything.
 
-def pilaster(mb, x0, x1):
+def pilaster(mb, x0, x1, lap=0.0):
     """Panelled wood pilaster: the interior set's answer to the quoin post.
 
     Dado-height plinth block, panelled shaft, capital under the head beam. The
@@ -1658,8 +1677,8 @@ def pilaster(mb, x0, x1):
     pilaster's front face is one plane with nothing competing for it."""
     wood, dark = M(WOOD), M(WOODD)
     yo0, yo1 = -HT - PIL_P, HT + PIL_P
-    z0, z1 = RAIL_Z, BEAM_Z - PIL_CAP
-    sl(mb, x0, x1, yo0, yo1, 0.0, RAIL_Z, dark)             # plinth block
+    z0, z1 = RAIL_Z + lap, BEAM_Z - PIL_CAP
+    sl(mb, x0, x1, yo0, yo1, 0.0, RAIL_Z + lap, dark)       # plinth block
     sl(mb, x0, x1, yo0, yo1, z1, BEAM_Z, dark)              # capital
     n = max(1, int(round((x1 - x0) / PIL_W)))
     step = (x1 - x0) / n
@@ -1841,11 +1860,15 @@ def wi_pilaster(mb):
     from a plain wall's own pivot), where it straddles the joint and hides the
     butt the way a Straight module's own column does. Interchangeable with
     `Pillar` on the same joint if you want one stone column in a papered room."""
-    pilaster(mb, -PIL_W, PIL_W)
+    # ★ `lap`: dropped on a finished run, this column's plinth top and the
+    # wall's chair rail both cap z = RAIL_Z from two different meshes -- 0.16 m2
+    # of light rail flickering against dark plinth, right where you look down on
+    # it. A hairline over, and the applied column simply stands on the rail.
+    pilaster(mb, -PIL_W, PIL_W, lap=INSERT_EPS)
     # square on the shaft and one hairline proud, exactly as int_dress -- here it
     # also has to beat the cap of the wall this column is DROPPED ON, which is a
     # different mesh and so beyond anything deconflict() can arbitrate
-    beam_block(mb, -PIL_W, PIL_W, p=PIL_P + INSERT_EPS)
+    beam_block(mb, -PIL_W, PIL_W, p=PIL_P + INSERT_EPS, z0=BEAM_Z - INSERT_EPS)
 
 
 def wi_corner(mb):
@@ -2068,7 +2091,7 @@ def arch_frame(mb, o, case=CASE, proj=P2, mat=None, key=True, key_mat=None):
     hw, zs, r = o["hw"], o["zs"], o["r"]
     y0, y1 = -HT - proj, HT + proj
     for sgn in (-1.0, 1.0):
-        x = sgn * hw
+        x = sgn * (hw - INSERT_EPS)     # ★ laps the reveal -- see CASE_LAP note
         sl(mb, min(x, x + sgn * case), max(x, x + sgn * case), y0, y1,
            o["z0"], zs, mat)
     voussoirs(mb, 0.0, zs, r - 0.01, r + case, y0, y1, mat=mat, gap=0.012)
@@ -2346,17 +2369,17 @@ def win_surround(mb, o, case=CASE, proj=P2, sill=False, mat=None):
     hw, z0, zs, r = o["hw"], o["z0"], o["zs"], o.get("r", 0.0)
     y0, y1 = -HT - proj, HT + proj
     for sgn in (-1.0, 1.0):
-        x = sgn * hw
+        x = sgn * (hw - INSERT_EPS)     # ★ laps the reveal -- see CASE_LAP note
         sl(mb, min(x, x + sgn * case), max(x, x + sgn * case), y0, y1, z0, zs, mat)
     if r > 0.0:
         voussoirs(mb, 0.0, zs, r - 0.01, r + case, y0, y1, mat=mat, gap=0.012)
         sl(mb, -CASE * 0.6, CASE * 0.6, y0 - 0.02, y1 + 0.02, zs + r - 0.03,
            zs + r + case + 0.06, mat)
     else:
-        sl(mb, -hw - case, hw + case, y0, y1, zs, zs + case, mat)
+        sl(mb, -hw - case, hw + case, y0, y1, zs - INSERT_EPS, zs + case, mat)
     if sill:
         sl(mb, -hw - case - 0.10, hw + case + 0.10, -HT - proj - 0.09,
-           HT + proj + 0.09, z0 - 0.14, z0, mat)
+           HT + proj + 0.09, z0 - 0.14, z0 + INSERT_EPS, mat)
 
 
 def n_small(mb):
@@ -2419,10 +2442,11 @@ def n_grate(mb):
     case, proj = CASE, P2
     y0, y1 = -HT - proj, HT + proj
     for sgn in (-1.0, 1.0):
-        sl(mb, min(sgn * hw, sgn * (hw + case)), max(sgn * hw, sgn * (hw + case)),
+        x = sgn * (hw - INSERT_EPS)      # ★ laps the reveal -- see CASE_LAP note
+        sl(mb, min(x, sgn * (hw + case)), max(x, sgn * (hw + case)),
            y0, y1, z0 - case, z1 + case, M(WOOD))
-    sl(mb, -hw - case, hw + case, y0, y1, z1, z1 + case, M(WOOD))
-    sl(mb, -hw - case, hw + case, y0, y1, z0 - case, z0, M(WOOD))
+    sl(mb, -hw - case, hw + case, y0, y1, z1 - INSERT_EPS, z1 + case, M(WOOD))
+    sl(mb, -hw - case, hw + case, y0, y1, z0 - case, z0 + INSERT_EPS, M(WOOD))
     # corner braces INSIDE the frame corners. Centred on the corner they stick
     # out as free-floating diamonds instead of reading as brackets.
     for sx in (-1.0, 1.0):
@@ -2771,7 +2795,7 @@ def build():
             mb = MB(name, PFX)
             fn(mb)
             ob = out(mb, coll, (i * STEP, y, 0.0), seam=seam_for(name),
-                     insert=(row in ("Doors", "Windows")),
+                     insert=(row in ("Doors", "Windows") or name in POSTS),
                      defer_top=(name in POSTS))
             label(labs[row], name, (i * STEP, y - 2.7, 0.30), size=0.30)
         label(labs[row], ROW_TITLE[row], (-STEP - 0.4, y - 2.7, 0.90), size=0.52)
@@ -2814,6 +2838,7 @@ def build():
 
     audit_bevel()
     audit_chamfer()
+    audit_fit()
     tris = 0
     for c in (c_w, c_i, c_d, c_n):
         for o in c.objects:
@@ -2914,6 +2939,106 @@ def audit_chamfer(report=True):
               % (len(bad), norm))
         for m, n in bad:
             print("   %.4f  %s" % (m, n.replace(PFX, "")))
+    return bad
+
+
+def audit_fit(report=True, min_area=0.01):
+    """Find coplanar clashes BETWEEN objects -- the class deconflict() cannot see.
+
+    ★★ `deconflict()` only ever looks at one mesh, so it arbitrates a wall's own
+    members and nothing else. Everything this kit assembles from two objects is
+    invisible to it: an insert's casing against the host wall's opening REVEAL
+    (0.30 m2 per jamb on every window wall, 0.80 on the small window's head), and
+    a free-standing column against the run it is dropped on -- its plinth top
+    against the chair rail it crosses, its block's soffit against the head beam.
+    All of them flickered wood against wood at eye level. `lift_insert()` handles
+    only the y rungs and the floor datum, which is why the rest needed CASE_LAP
+    and the `lap` / `z0` arguments on `pilaster` / `beam_block`.
+
+    The pass: for every pair of objects whose bounds touch, group world-space
+    axis-aligned faces by plane and facing, and report different-material
+    overlaps -- but only where BOTH faces are actually exposed. The exposure test
+    is what makes it usable: a face buried under its own member (a column's
+    capital under its own block) is coplanar with the neighbour's and will never
+    render, and without the test those swamp the real findings."""
+    from mathutils.bvhtree import BVHTree
+    dg = bpy.context.evaluated_depsgraph_get()
+    cache, bvhs, boxes = {}, {}, {}
+
+    def prep(ob):
+        if ob.name in cache:
+            return
+        me = ob.evaluated_get(dg).to_mesh()
+        mw = ob.matrix_world
+        rot = mw.to_3x3()
+        vs = [mw @ v.co for v in me.vertices]
+        tris, faces = [], []
+        for p in me.polygons:
+            idx = list(p.vertices)
+            for i in range(1, len(idx) - 1):
+                tris.append((idx[0], idx[i], idx[i + 1]))
+            n = (rot @ p.normal).normalized()
+            ax = max(range(3), key=lambda i: abs(n[i]))
+            if abs(n[ax]) < 0.999:
+                continue
+            co = [vs[i][ax] for i in p.vertices]
+            if max(co) - min(co) > 1e-5:
+                continue
+            o = [i for i in range(3) if i != ax]
+            faces.append((ax, 1 if n[ax] > 0 else -1, sum(co) / len(co),
+                          me.materials[p.material_index].name
+                          if p.material_index < len(me.materials) else "?",
+                          (min(vs[i][o[0]] for i in p.vertices),
+                           max(vs[i][o[0]] for i in p.vertices),
+                           min(vs[i][o[1]] for i in p.vertices),
+                           max(vs[i][o[1]] for i in p.vertices)),
+                          mw @ p.center, n))
+        cache[ob.name] = faces
+        bvhs[ob.name] = BVHTree.FromPolygons(vs, tris, all_triangles=True)
+        ws = [mw @ Vector(c) for c in ob.bound_box]
+        boxes[ob.name] = ([min(w[i] for w in ws) for i in range(3)],
+                          [max(w[i] for w in ws) for i in range(3)])
+        ob.evaluated_get(dg).to_mesh_clear()
+
+    obs = []
+    for cn in (PFX + "Fitted", PFX + "Demo"):
+        c = bpy.data.collections.get(cn)
+        if c is None:
+            continue
+        obs += [o for o in c.objects
+                if o.type == "MESH" and "Floor" not in o.name
+                and "Stage" not in o.name]
+    for ob in obs:
+        prep(ob)
+    bad = []
+    for i in range(len(obs)):
+        for j in range(i + 1, len(obs)):
+            a, b = obs[i], obs[j]
+            la, ha = boxes[a.name]
+            lb, hb = boxes[b.name]
+            if any(la[k] > hb[k] + 0.02 or lb[k] > ha[k] + 0.02 for k in range(3)):
+                continue
+            for ax, sg, v, m1, r1, c1, n1 in cache[a.name]:
+                for ax2, sg2, v2, m2, r2, c2, n2 in cache[b.name]:
+                    if ax != ax2 or sg != sg2 or abs(v - v2) > 4e-4 or m1 == m2:
+                        continue
+                    w = min(r1[1], r2[1]) - max(r1[0], r2[0])
+                    h = min(r1[3], r2[3]) - max(r1[2], r2[2])
+                    if w <= 0 or h <= 0 or w * h < min_area:
+                        continue
+                    if any(bvhs[o.name].ray_cast(c + n * 0.0008, n, 8.0)[0]
+                           is not None
+                           for o, c, n in ((a, c1, n1), (a, c2, n2),
+                                           (b, c1, n1), (b, c2, n2))):
+                        continue                       # something covers it
+                    bad.append((w * h, a.name, b.name, m1, m2, "xyz"[ax], v))
+    if report and bad:
+        bad.sort(reverse=True)
+        print("!! %d exposed coplanar clash(es) BETWEEN objects:" % len(bad))
+        for ar, an, bn, m1, m2, ax, v in bad[:10]:
+            print("   %.3f m2  %s x %s  %s/%s  %s=%.3f"
+                  % (ar, an.replace(PFX, ""), bn.replace(PFX, ""),
+                     m1.replace(PFX, ""), m2.replace(PFX, ""), ax, v))
     return bad
 
 
