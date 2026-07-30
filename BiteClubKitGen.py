@@ -2588,7 +2588,9 @@ def bk_material(slug, name):
 # they must read as one workshop, so each pair comes from ONE asset with the dark
 # half stained down (`bk_dark`) rather than from two unrelated scans -- the grain,
 # the plank width and the roughness then match, which two assets never quite do.
-# ★ ORDER IS THE PICK: the piece copies below use BK_WOODS[0]. Hard leads
+# ★★ ORDER IS THE PICK: BK_WOODS[0] IS THE KIT'S TIMBER -- `kit_timber()` gives
+# it the BC_Wood / BC_WoodDark slot names, so changing this one line re-timbers
+# all 48 pieces at once. Hard leads
 # because the kit MODELS its boards -- a texture that draws its own planks
 # (Wood_Planks) puts a second, misaligned set of joints across every member and
 # reads as noise the moment it meets the wainscot. Flat tone, quiet grain, and
@@ -2862,12 +2864,63 @@ def mat_glass(name, color):
     return m
 
 
+def _has_image(m):
+    return bool(m.use_nodes) and any(n.type == "TEX_IMAGE" and n.image
+                                     for n in m.node_tree.nodes)
+
+
+def kit_timber():
+    """Make the kit's two timbers the 2K BlenderKit hardwood and its stain.
+
+    ★ It takes over the EXISTING slot names -- BC_Wood and BC_WoodDark -- rather
+    than arriving as new ones. Every builder in the file asks for M(WOOD), every
+    exported FBX names those two slots, and Unity maps its own URP materials onto
+    those names, so swapping the definition behind the name re-timbers all 48
+    pieces (and the decorated copies, which share the slots) with nothing else to
+    change and no second set of geometry.
+
+    ★ The procedural pair it replaces is recognised by having no image texture,
+    and removed before the append so the appended one can claim the name. Safe at
+    this point in build(): the collections were purged a moment ago, so nothing
+    is holding the old material.
+
+    Returns False if the asset is not in the BlenderKit cache, in which case the
+    caller falls back to the procedural wood and the kit still builds."""
+    for n in (WOOD, WOODD):
+        m = bpy.data.materials.get(n)
+        if m is not None and not _has_image(m):
+            bpy.data.materials.remove(m)
+    light = bk_material(BK_WOODS[0][0], "Wood")
+    if light is None:
+        return False
+    bk_dark(light, "WoodDark")
+    return True
+
+
+def drop_spare_timbers():
+    """Candidates from the timber trial that are not the kit's pick.
+
+    They carry packed 2K images AND a fake user, so nothing would ever collect
+    them -- left alone they quietly cost more file than the whole kit does."""
+    keep = {PFX + "Wood", PFX + "WoodDark"}
+    gone = 0
+    for m in list(bpy.data.materials):
+        if m.name.startswith(PFX + "Wood_") and m.name not in keep and m.users <= 1:
+            bpy.data.materials.remove(m)
+            gone += 1
+    if gone:
+        bpy.data.orphans_purge(do_recursive=True)
+    return gone
+
+
 def materials():
     mat_paper(PAPER, srgb(C_PAPER), srgb(C_PAPER2))
     mat_paper(PAPER_B, srgb(C_PAPER), srgb(C_PAPER2))
     mat_stone(STONE, srgb(C_STONE), srgb(C_STONE2))
-    mat_wood(WOOD, srgb(C_WOOD), srgb(C_WOOD2))
-    mat_wood(WOODD, srgb(C_WOOD_DK), srgb(0x33221C))
+    if not kit_timber():          # cache miss: keep building on the procedural
+        mat_wood(WOOD, srgb(C_WOOD), srgb(C_WOOD2))
+        mat_wood(WOODD, srgb(C_WOOD_DK), srgb(0x33221C))
+    drop_spare_timbers()
     mat_flat(IRON, srgb(C_IRON), rough=0.42)
     mat_glass(GLASS, srgb(C_GLASS))
     # Muted library colours, not the sheet's neon swatches -- those are for
@@ -2935,10 +2988,9 @@ def seam_for(name):
 POSTS = ("Pillar", "Pilaster")
 
 ROW_Y = {"Walls": 0.0, "WallsInt": -13.0, "WallsDec": -26.0,
-         "Papers": -39.0, "Woods": -52.0, "Doors": 13.0, "Windows": 24.0}
+         "Papers": -39.0, "Doors": 13.0, "Windows": 24.0}
 ROW_TITLE = {"Walls": "WALLS", "WallsInt": "INTERIOR WALLS",
              "WallsDec": "DECORATED INTERIOR", "Papers": "BOOKMARKED PAPERS",
-             "Woods": "TIMBER TRIAL",
              "Doors": "DOORS", "Windows": "WINDOWS"}
 STEP = 5.4
 
@@ -2994,7 +3046,6 @@ def build():
     c_i = BK.ensure_coll(PFX + "Walls_Int", root)
     c_dc = BK.ensure_coll(PFX + "Walls_Dec", root)
     c_pp = BK.ensure_coll(PFX + "Papers", root)
-    c_wd = BK.ensure_coll(PFX + "Walls_Wood", root)
     c_d = BK.ensure_coll(PFX + "Doors", root)
     c_n = BK.ensure_coll(PFX + "Windows", root)
     c_x = BK.ensure_coll(PFX + "Demo", root)
@@ -3002,11 +3053,11 @@ def build():
     c_l = BK.ensure_coll(PFX + "Preview", root)
     c_g = BK.ensure_coll(PFX + "Lighting", root)
     labs = {r: BK.ensure_coll(PFX + "Lab_" + r, c_l)
-            for r in ("Walls", "WallsInt", "WallsDec", "Papers", "Woods",
+            for r in ("Walls", "WallsInt", "WallsDec", "Papers",
                       "Doors", "Windows", "Fitted")}
     c_s = BK.ensure_coll(PFX + "Stage", c_l)
 
-    ground_plane(c_s, "Stage", 26.0, -8.0, 120.0, 122.0)
+    ground_plane(c_s, "Stage", 26.0, 4.0, 120.0, 96.0)
 
     for coll, items, row in ((c_w, WALLS, "Walls"), (c_i, WALLS_INT, "WallsInt"),
                              (c_d, DOORS, "Doors"), (c_n, WINDOWS, "Windows")):
@@ -3059,31 +3110,6 @@ def build():
                   (i * STEP, y - 2.7, 0.30), size=0.30)
         label(labs["Papers"], ROW_TITLE["Papers"],
               (-STEP - 0.4, y - 2.7, 0.90), size=0.52)
-
-    # ---- timber trial: the SAME wall in each candidate wood (so the only
-    # variable is the timber), then a few pieces in the front-runner with a
-    # bookmarked paper on them, which is what a finished room would look like
-    woods = bk_woods()
-    if woods:
-        y = ROW_Y["Woods"]
-        for i, (light, dark, nm) in enumerate(woods):
-            wood_copy(K[PFX + "Wall_Int_Straight"], nm + "_Swatch", c_wd,
-                      (i * STEP, y, 0.0), light, dark)
-            label(labs["Woods"], nm.replace("Wood_", ""),
-                  (i * STEP, y - 2.7, 0.30), size=0.30)
-        light, dark, nm = woods[0]
-        pap = papers[0] if papers else None
-        for j, piece in enumerate(("Wall_Int_Door", "Wall_Int_Corner",
-                                   "Wall_Int_Broken", "Pilaster")):
-            i = len(woods) + j
-            out_nm = piece.replace("Wall_Int_", "Wall_Wood_")
-            if out_nm == piece:
-                out_nm = piece + "_Wood"
-            wood_copy(K[PFX + piece], out_nm, c_wd, (i * STEP, y, 0.0),
-                      light, dark, pap)
-            label(labs["Woods"], out_nm, (i * STEP, y - 2.7, 0.30), size=0.30)
-        label(labs["Woods"], ROW_TITLE["Woods"], (-STEP - 0.4, y - 2.7, 0.90),
-              size=0.52)
 
     demo_room(c_x, (6.0, DEMO_Y))
     int_rooms(c_x, (0.0, DEMO_Y - 30.0))
@@ -3465,7 +3491,7 @@ SHOTS = {
     # pulled back when the interior row was added -- the plate is only useful if
     # it holds ALL of the rows, and a fourth one shifts the whole layout toward
     # the lens
-    "overview":   ((100.0, -104.0, 76.0), (36.0, -12.0, 0.0), 40),
+    "overview":   ((92.0, -96.0, 70.0), (34.0, -6.0, 0.0), 40),
     "demo_hero":  ((DX - 19.0, DY - 22.0, 9.5), (DX, DY, 1.6), 34),
     "demo_close": ((DX - 5.0, DY - 13.0, 2.4), (DX - 2.0, DY - 4.0, 1.8), 34),
     "demo_in":    ((DX - 3.0, DY - 2.6, 1.70), (DX + 3.5, DY + 2.0, 1.90), 20),
@@ -3517,7 +3543,6 @@ SHOTS.update(_row_shots("walls", ROW_Y["Walls"], len(WALLS)))
 SHOTS.update(_row_shots("wallsint", ROW_Y["WallsInt"], len(WALLS_INT)))
 SHOTS.update(_row_shots("wallsdec", ROW_Y["WallsDec"], len(WALLS_INT)))
 SHOTS.update(_row_shots("papers", ROW_Y["Papers"], len(BK_PAPERS)))
-SHOTS.update(_row_shots("woods", ROW_Y["Woods"], len(BK_WOODS) + 4))
 SHOTS.update(_row_shots("doors", ROW_Y["Doors"], len(DOORS), dist=17.0, lens=38.0,
                         z=1.75, tz=1.55))
 SHOTS.update(_row_shots("windows", ROW_Y["Windows"], len(WINDOWS), dist=15.0,
@@ -3536,7 +3561,6 @@ def aim(cam, loc, tgt, lens):
 # -- or inside -- its neighbours. Isolating the row is cheaper than spreading the
 # layout over 100 m, and gives clean sheet-style plates either way.
 ISO = [PFX + "Walls", PFX + "Walls_Int", PFX + "Walls_Dec", PFX + "Papers",
-       PFX + "Walls_Wood", PFX + "Lab_Woods",
        PFX + "Lab_WallsDec", PFX + "Lab_Papers",
        PFX + "Doors", PFX + "Windows",
        PFX + "Fitted", PFX + "Demo", PFX + "Stage", PFX + "Lab_Walls",
@@ -3547,7 +3571,6 @@ ROW_COLL = {"walls": [PFX + "Walls", PFX + "Lab_Walls", _ST],
             "wallsint": [PFX + "Walls_Int", PFX + "Lab_WallsInt", _ST],
             "wallsdec": [PFX + "Walls_Dec", PFX + "Lab_WallsDec", _ST],
             "papers": [PFX + "Papers", PFX + "Lab_Papers", _ST],
-            "woods": [PFX + "Walls_Wood", PFX + "Lab_Woods", _ST],
             "doors": [PFX + "Doors", PFX + "Lab_Doors", _ST],
             "windows": [PFX + "Windows", PFX + "Lab_Windows", _ST],
             "fitted": [PFX + "Fitted", PFX + "Lab_Fitted", _ST],
