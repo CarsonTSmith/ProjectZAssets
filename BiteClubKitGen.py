@@ -1619,11 +1619,9 @@ def pilaster(mb, x0, x1):
     Dado-height plinth block, panelled shaft, capital under the head beam. The
     panel layout is DERIVED FROM THE WIDTH -- one bay per PIL_W of column, a
     stile on every division, and an internal division carrying two stiles' worth.
-    That is what makes the free-standing `Pilaster` identical to the two
-    module-end pilasters it replaces at a joint, the same invariant `Pillar`
-    holds against `quoin_col` and for the same reason: a run of Wall_Int_Plain
-    dressed with Pilasters has to be indistinguishable from a run of
-    Wall_Int_Straight.
+    At the kit's column width (2 x PIL_W) that gives two bays and a double centre
+    stile, so the free-standing `Pilaster` and the column a wall carries at its
+    end are the SAME piece of joinery, built by the same call.
 
     ★ The plinth runs up to the CHAIR RAIL, not to the skirting. That is how a
     real pilaster is built -- the plinth block is dado height -- and it also
@@ -1719,17 +1717,38 @@ def int_stool(mb, o, top=None):
 
 
 def int_dress(mb, hw, opens, posts=True):
-    """The interior vocabulary: head beam, wainscot on BOTH faces, and a panelled
-    pilaster at each module end.
+    """The interior vocabulary: head beam, wainscot on BOTH faces, and ONE whole
+    pilaster standing at the module's -X end.
 
-    Same shape as `dress()` and for the same reasons -- the field trim runs the
-    FULL module width and the pilasters ride over it, so Wall_Int_Straight and
-    Wall_Int_Plain + Pilaster emit identical joinery."""
-    top_beam(mb, -hw, hw, ends=posts)
+    ★★★ THE COLUMN IS NEVER SPLIT ACROSS TWO MODULES. The stone family puts half
+    a quoin at each end and lets a butted pair read as one 0.68 m post, which
+    works for masonry: the blocks are modelled, they alternate, and stone has no
+    direction. Do the same in WOOD and the joint is obvious -- the grain runs
+    along the boards, each module projects its UVs in its OWN local space, and
+    the two halves meet with the figure jumping across the middle stile. It reads
+    as two things butted together, which is the one thing a modular kit must
+    never do at eye level.
+    So the whole column lives on one side: 2 x PIL_W wide, its outer face flush
+    with the module datum, and the heavy beam block over it likewise (2 x
+    BEAM_END, the same 0.88 m a butted pair used to make). It is the SAME
+    geometry as the free-standing `Pilaster` -- one mesh, one UV projection, one
+    piece of timber.
+    ★ The convention that falls out: a module dresses its -X end, so runs are
+    built in +X / +Y away from a corner -- which is the direction corner wings
+    already run. Every module boundary is then covered full height by the next
+    module's column (floor to beam) and its block (beam to top), so the shell,
+    ground, skirting, rail and beam all butt behind timber.
+    ★ N modules carry N columns and make N+1 joints, so the joint at the FAR end
+    of a run has none: cap it with a free-standing `Pilaster`, which straddles
+    and is one mesh. That is a property of one-sided trim, not a bug to design
+    around -- dressing both ends is what put a seam down the middle of every
+    column, and having the corner piece dress a wing end only moves the problem,
+    since which wing is the bare one depends on the plan's handedness."""
+    top_beam(mb, -hw, hw, ends=False)
     wainscot(mb, spans(hw, opens, 0.0, RAIL_Z))
     if posts:
-        pilaster(mb, -hw, -hw + PIL_W)
-        pilaster(mb, hw - PIL_W, hw)
+        pilaster(mb, -hw, -hw + 2.0 * PIL_W)
+        beam_block(mb, -hw, -hw + 2.0 * BEAM_END)
 
 
 def int_shell(mb, hw, opens):
@@ -1764,11 +1783,14 @@ def wi_plain_half(mb):
 
 
 def wi_pilaster(mb):
-    """The panelled column on its own, 0.68 m wide -- exactly what two butted
-    Wall_Int_Straight ends make, down to the stile widths and the beam block.
-    Pivot is the column centre; it belongs on a wall JOINT, 2 m from a wall's own
-    pivot along the run. Interchangeable with `Pillar` on the same joint if you
-    want one stone column in a papered room."""
+    """The panelled column on its own, 0.68 m wide -- the SAME column
+    Wall_Int_Straight carries at its end, down to the stile widths and the beam
+    block, just free-standing.
+
+    Pivot is the column centre, and it belongs on a `Wall_Int_Plain` JOINT (2 m
+    from a plain wall's own pivot), where it straddles the joint and hides the
+    butt the way a Straight module's own column does. Interchangeable with
+    `Pillar` on the same joint if you want one stone column in a papered room."""
     pilaster(mb, -PIL_W, PIL_W)
     beam_block(mb, -BEAM_END, BEAM_END)     # = two module-end blocks butted
 
@@ -2909,9 +2931,8 @@ def int_rooms(coll, org):
     for i in range(3):
         dup(K[PFX + "Wall_Int_Plain"], coll, (ox - 4.0, oy + 4.0 * i + 4.0, 0.0),
             RAD(90))
-    dup(K[PFX + "Pilaster"], coll, (ox - 4.0, oy + 6.0, 0.0), RAD(90))
-    dup(K[PFX + "Pilaster"], coll, (ox - 4.0, oy + 10.0, 0.0), RAD(90))
-    dup(K[PFX + "Pilaster"], coll, (ox - 4.0, oy + 14.0, 0.0), RAD(90))
+    for j in (2.0, 6.0, 10.0, 14.0):      # a Plain run needs one on EVERY joint
+        dup(K[PFX + "Pilaster"], coll, (ox - 4.0, oy + j, 0.0), RAD(90))
     # east return: the walk-through arch a room away from the door, then the
     # oculus above the dado -- both Straight-family, so their joint reads as one
     # full column the way a butted pair is meant to
@@ -2921,6 +2942,12 @@ def int_rooms(coll, org):
     dup(K[PFX + "Wall_Int_Window_Round"], coll, (ox + 16.0, oy + 8.0, 0.0),
         RAD(90))
     dup(K[PFX + "Wall_Int_Half"], coll, (ox + 16.0, oy + 11.0, 0.0), RAD(90))
+    # ★ Cap the FAR joint of each Straight-family run. N modules carry N columns
+    # and make N+1 joints, so the last one -- here where the partition meets the
+    # east corner's wing, and at the top of the east return -- has none until a
+    # free-standing Pilaster straddles it.
+    dup(K[PFX + "Pilaster"], coll, (ox + 14.0, oy, 0.0), 0.0)
+    dup(K[PFX + "Pilaster"], coll, (ox + 16.0, oy + 12.0, 0.0), RAD(90))
 
 
 def pillar_run(coll, org):
@@ -3406,15 +3433,42 @@ outside of a building and a partition has two insides. Use them anywhere both
 faces are seen from a room: between two rooms, along a corridor, around a
 stairwell, dividing a hall.
 
-What replaces the stone quoin is a **panelled wood pilaster** on the same column
-width (%.2f m per module end, %.2f m for the free-standing piece) and the same
-projection rung, so the two families sit on ONE lattice and butt without a step.
-An outside wall can turn into a partition mid-run and the joint still reads as
-one deliberate column.
+What replaces the stone quoin is a **panelled wood pilaster**, %.2f m wide on the
+same projection rung as the quoin, so the two families sit on ONE lattice and
+butt without a step.
+
+### The column sits WHOLE at one end -- build runs in +X / +Y
+
+The stone family puts half a quoin at each module end and lets a butted pair read
+as one post. That works for masonry and **does not work for timber**: the grain
+runs along the boards, each module projects its UVs in its own local space, and
+two halves meet with the figure jumping down the middle of the column. So an
+interior module carries **one whole pilaster at its -X end** (and the heavy beam
+block above it), never two halves.
+
+The convention that falls out: **a module dresses its -X end, so runs are built
+in +X / +Y away from a corner** -- the direction corner wings already run. Walk a
+room anticlockwise from each corner and every joint is covered, floor to ceiling,
+by the next module's column and block: the shell, the board ground, the skirting,
+the chair rail and the head beam all butt *behind* timber, and no butt joint in
+the kit is left in the open. Run a wall the other way and the joint at the corner
+end is bare -- flip the module, or cap it with a free-standing `Pilaster`.
+
+`Wall_Int_Straight` therefore puts its column immediately AFTER each joint;
+`Wall_Int_Plain` + `Pilaster` puts one centred ON the joint. Both give a 0.68 m
+column at every joint and both hide the butt; they differ only by 0.34 m in where
+the column lands, so pick one per run rather than mixing them in the same wall.
+
+**Cap the far end of a run.** N modules carry N columns and make N+1 joints, so
+whichever end you finish on has a bare joint -- drop a free-standing `Pilaster`
+on it. It straddles the joint, it is one mesh, and it is the same column the
+walls carry, so it closes the run exactly. A `Wall_Int_Plain` run wants one on
+*every* joint. Budget one extra Pilaster per run and the room has no exposed butt
+joint anywhere.
 
 | Interior piece | Exterior twin | Notes |
 |---|---|---|
-| `Wall_Int_Straight` / `_Half` | `Wall_Straight` / `Wall_Half` | pilaster at both ends |
+| `Wall_Int_Straight` / `_Half` | `Wall_Straight` / `Wall_Half` | whole pilaster at the -X end |
 | `Wall_Int_Plain` / `_Plain_Half` | `Wall_Plain` / `Wall_Plain_Half` | no end columns -- butt in runs |
 | `Pilaster` | `Pillar` | free-standing column, %.2f m wide, drop on a JOINT |
 | `Wall_Int_Corner` / `_Corner_Inside` | same | convex / reflex corner post |
@@ -3457,7 +3511,7 @@ def write_readme(out_dir, written):
         "- `%s`" % n.replace(PFX, "") for n in written)
     mats = len([m for m in CANON if m not in (LABEL, STAGE)])
     txt = README % (
-        README_INT % (PIL_W, 2 * PIL_W, 2 * PIL_W),
+        README_INT % (2 * PIL_W, 2 * PIL_W),
         DOOR_HINGE, -DD_HINGE, DD_HINGE, OP_A["hw"] - 0.05,
         SECRET_HINGE, -(HT + 0.24), TRAP_HINGE,
         2 * OP_D["hw"], OP_D["zs"] + OP_D["r"],
