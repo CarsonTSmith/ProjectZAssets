@@ -207,6 +207,13 @@ BEAM_END = 0.44                # wood block over each post
 SKIRT_Z, SKIRT_P = 0.16, P2
 WAIN_Z, WAIN_P = 0.98, P1
 RAIL_Z, RAIL_P = 1.14, P2
+# ★ The boards are fixed to a GROUND, and it is not decoration: the run leaves
+# PLANK_G between boards, the chamfer opens that to about 70 mm, and without a
+# panel behind it every groove in the dado showed a stripe of the wallpaper. The
+# ground stands half a rung proud so the boards keep their shadow line, and is
+# thick enough to chamfer (BEVEL_MIN) by reaching back INTO the wall rather than
+# by standing further out. See ground().
+GROUND_P, GROUND_T, GROUND_LAP = 0.03, 0.09, 0.02
 
 # Stone plinth on the stone-native pieces: exactly ONE course.
 BASE_Z, BASE_P = COURSE, P2
@@ -335,6 +342,27 @@ def sl(mb, x0, x1, y0, y1, z0, z1, mat, faces=None, uvs=0.0):
                 f[mb.uvlay] = uvs
 
 
+def _seal(mb, before):
+    """Give the faces just emitted a real, outward normal.
+
+    ★★ `extrude_poly` leaves EVERY face it makes with a zero-length normal --
+    bmesh does not compute them until something asks. `face_key` then reads
+    (0,0,0), takes axis 0, sees it is not positive and answers "-x" for the top
+    cap, the bottom cap and all six sides alike. Both material passes in this kit
+    (`shell` and `_corner_core`) sort faces BY NORMAL, so every face of an
+    L-shaped corner slab was being handed the convex wall slot: the corner was
+    crowned with wallpaper where the beam cap should be, its wing end caps were
+    papered instead of lined, and its concave side sat on slot 0 with the convex
+    one, so the two rooms a corner divides could not be papered differently. None
+    of it was visible in a render because both wall slots ship the same damask.
+    Recalculating here rather than in the two consumers means anything authored
+    later gets it right by construction -- and it is idempotent with the recalc
+    `out()` runs before the datum passes."""
+    new = [f for f in mb.bm.faces if f not in before]
+    if new:
+        bmesh.ops.recalc_face_normals(mb.bm, faces=new)
+
+
 def poly(mb, pts_xz, y0, y1, mat):
     """Sweep a planar XZ polygon through the wall thickness.
 
@@ -344,7 +372,9 @@ def poly(mb, pts_xz, y0, y1, mat):
     stepped boxes -- the soffit comes out as one continuous curved surface."""
     if len(pts_xz) < 3:
         return
+    before = set(mb.bm.faces)
     mb.extrude_poly([(x, y0, z) for x, z in pts_xz], (0.0, y1 - y0, 0.0), mat)
+    _seal(mb, before)
 
 
 def lpoly(mb, pts_xy, z0, z1, mat):
@@ -358,7 +388,9 @@ def lpoly(mb, pts_xy, z0, z1, mat):
     at the corner cell, which is what showed up as a slot in the skirting."""
     if len(pts_xy) < 3 or z1 - z0 <= 1e-6:
         return
+    before = set(mb.bm.faces)
     mb.extrude_poly([(x, y, z0) for x, y in pts_xy], (0.0, 0.0, z1 - z0), mat)
+    _seal(mb, before)
 
 
 def arc_pts(cx, cz, r, a0, a1, n):
@@ -995,6 +1027,28 @@ def quoin_inner(mb, z0, z1, p=None, mat=None, lng=0.58, sht=0.44):
                    (o, i_ + lb), (i_, i_ + lb)], za, zb, mat)
 
 
+def ground(mb, a0, a1, sgn, mat=None, axis="x"):
+    """The board GROUND: a continuous wood panel behind a plank run.
+
+    ★ A plank run leaves PLANK_G between boards and the chamfer opens that to
+    ~70 mm, and behind it was the wall -- so every groove in the wainscot showed
+    a stripe of purple damask, the length of the room. Boards are always fixed to
+    a ground in real joinery for exactly this reason; there is no wallpaper
+    behind a dado.
+    ★ It stands GROUND_P proud (half a rung, so the boards keep a real shadow
+    line) but is GROUND_T thick, reaching back INTO the wall -- a 30 mm slab
+    would be under BEVEL_MIN and would clamp the chamfer of the whole piece. It
+    laps GROUND_LAP into the skirting and the chair rail at both ends so it never
+    shares a plane with either."""
+    mat = M(WOOD) if mat is None else mat
+    y0, y1 = sgn * (HT + GROUND_P), sgn * (HT + GROUND_P - GROUND_T)
+    z0, z1 = SKIRT_Z - GROUND_LAP, WAIN_Z + GROUND_LAP
+    if axis == "x":
+        sl(mb, a0, a1, min(y0, y1), max(y0, y1), z0, z1, mat)
+    else:
+        sl(mb, min(y0, y1), max(y0, y1), a0, a1, z0, z1, mat)
+
+
 def plank_run(mb, x0, x1, y0, y1, z0, z1, mat, pw=PLANK_W, gap=PLANK_G,
               axis="x", chamf=0.02):
     """Boards with a groove between them, spaced along `axis`.
@@ -1017,38 +1071,17 @@ def plank_run(mb, x0, x1, y0, y1, z0, z1, mat, pw=PLANK_W, gap=PLANK_G,
             sl(mb, x0 + chamf, x1 - chamf, y0, y1, b0, b1, mat)
 
 
-def face_wainscot(mb, axis, a0, a1, sgn):
-    """Skirting + vertical boards + chair rail on ONE face of a wing.
+def corner_band(mb, p, z0, z1, mat, sgn=-1.0, inset=0.0):
+    """Skirting or chair rail mitred round a corner as ONE L-shaped solid.
 
-    `axis` is the direction the wing runs; `sgn` picks which of its two faces."""
-    if a1 - a0 < 0.06:
-        return
-    mat, dark = M(WOOD), M(WOODD)
-
-    def band(p, z0, z1, m):
-        q0, q1 = sgn * HT, sgn * (HT + p)
-        lo, hi = min(q0, q1), max(q0, q1)
-        if axis == "x":
-            sl(mb, a0, a1, lo, hi, z0, z1, m)
-        else:
-            sl(mb, lo, hi, a0, a1, z0, z1, m)
-    band(SKIRT_P, 0.0, SKIRT_Z, dark)
-    q0, q1 = sgn * HT, sgn * (HT + WAIN_P)
-    lo, hi = min(q0, q1), max(q0, q1)
-    if axis == "x":
-        plank_run(mb, a0, a1, lo, hi, SKIRT_Z, WAIN_Z, mat, axis="x")
-    else:
-        plank_run(mb, lo, hi, a0, a1, SKIRT_Z, WAIN_Z, mat, axis="y")
-    band(RAIL_P, WAIN_Z, RAIL_Z, mat)
-
-
-def corner_band(mb, p, z0, z1, mat, sgn=-1.0):
-    """Skirting or chair rail mitred round a corner as ONE L-shaped solid."""
+    `inset` pushes the band's INNER face back into the wall, which is how the
+    ground behind the wainscot boards is made thick enough to chamfer while
+    standing only GROUND_P proud."""
     if sgn < 0:
-        o, i_ = -HT - p, -HT
+        o, i_ = -HT - p, -HT + inset
         pts = [(o, o), (CWING, o), (CWING, i_), (i_, i_), (i_, CWING), (o, CWING)]
     else:
-        o, i_ = HT + p, HT
+        o, i_ = HT + p, HT - inset
         pts = [(i_, i_), (CWING, i_), (CWING, o), (o, o), (o, CWING), (i_, CWING)]
     lpoly(mb, pts, z0, z1, mat)
 
@@ -1065,6 +1098,8 @@ def corner_wainscot(mb, sgn=-1.0):
     mat, dark = M(WOOD), M(WOODD)
     corner_band(mb, SKIRT_P, 0.0, SKIRT_Z, dark, sgn)
     corner_band(mb, RAIL_P, WAIN_Z, RAIL_Z, mat, sgn)
+    corner_band(mb, GROUND_P, SKIRT_Z - GROUND_LAP, WAIN_Z + GROUND_LAP, mat,
+                sgn, inset=GROUND_T - GROUND_P)
     q0, q1 = sgn * HT, sgn * (HT + WAIN_P)
     lo, hi = min(q0, q1), max(q0, q1)
     # the X-wing boards start a board-depth early so they fill the corner cell;
@@ -1111,6 +1146,7 @@ def wainscot(mb, segs, mat=None, dark=None):
         for sgn in (-1.0, 1.0):
             ya = sgn * HT
             yb = sgn * (HT + WAIN_P)
+            ground(mb, x0, x1, sgn, mat)
             plank_run(mb, x0, x1, min(ya, yb), max(ya, yb), SKIRT_Z, WAIN_Z, mat)
         sl(mb, x0, x1, -HT - RAIL_P, HT + RAIL_P, WAIN_Z, RAIL_Z, mat)
 
@@ -1405,18 +1441,31 @@ def _corner_core(mb, outer_is_a, m_e=None):
             f.material_index = ie
 
 
+def corner_solid(mb, p, z0, z1, mat):
+    """The wall's own L footprint grown by `p` on BOTH faces, as ONE solid.
+
+    ★★ This is the corner head beam, and it used to be four members: a mitred
+    band down each face plus two boxes filling the core between them. Two
+    problems, both of which land on the one surface you look straight down at.
+    The boxes butt the bands on y = +/-HT with a 90-degree edge each side, so the
+    chamfer cuts a V-groove along the whole top of the beam -- the same defect
+    that made butted quoin boxes read as loose bricks. And `deconflict()` gives a
+    datum plane to its LARGEST surface: split four ways, not one of the beam's
+    top faces could beat the shell's 1.20 m2 L, so the STRUCTURE won z = H and the
+    entire wood cap was pushed half a millimetre under it -- wallpaper crowning
+    the corner, showing through those grooves. One solid is bigger than the shell,
+    so it takes the datum the way a straight wall's cap box always did."""
+    o, i_ = -HT - p, HT + p
+    lpoly(mb, [(o, o), (CWING, o), (CWING, i_), (i_, i_), (i_, CWING), (o, CWING)],
+          z0, z1, mat)
+
+
 def _corner_beam(mb):
-    """Head beam mitred round both wings as L-solids, with the standard block
-    over the corner -- the same `beam_block` section a post gets."""
+    """Head beam mitred round both wings, with the standard block over the
+    corner -- the same `beam_block` section a post gets."""
     wood = M(WOOD)
-    corner_band(mb, BEAM_P, BEAM_Z, BEAM_CAP_Z, wood, -1.0)
-    corner_band(mb, BEAM_P, BEAM_Z, BEAM_CAP_Z, wood, 1.0)
-    sl(mb, -HT, CWING, -HT, HT, BEAM_Z, BEAM_CAP_Z, wood)
-    sl(mb, -HT, HT, HT, CWING, BEAM_Z, BEAM_CAP_Z, wood)
-    corner_band(mb, BEAM_CAP_P, BEAM_CAP_Z, H, wood, -1.0)
-    corner_band(mb, BEAM_CAP_P, BEAM_CAP_Z, H, wood, 1.0)
-    sl(mb, -HT, CWING, -HT, HT, BEAM_CAP_Z, H, wood)
-    sl(mb, -HT, HT, HT, CWING, BEAM_CAP_Z, H, wood)
+    corner_solid(mb, BEAM_P, BEAM_Z, BEAM_CAP_Z, wood)
+    corner_solid(mb, BEAM_CAP_P, BEAM_CAP_Z, H, wood)
     # symmetric about the corner, so it caps a quoin on either side and matches
     # the 0.70 m section of a straight wall's end block
     o = HT + BEAM_CAP_P + 0.02
